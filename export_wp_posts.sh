@@ -207,6 +207,8 @@ if [ ! -s "$USERS_WITH_COUNT_FILE" ]; then
     echo "❌ Error: User export with post counts is empty." >&2
     exit 1
 fi
+fi
+
 
 #########################################
 # Generating Excel Output
