@@ -40,6 +40,12 @@
 #   - export_debug_log.txt: Debug log (if DEBUG mode is enabled).
 ################################################################################
 
+if ! command -v wp &> /dev/null; then
+  echo "❌ Error: WP-CLI (wp) is not installed or not in PATH."
+  echo "Please install WP-CLI before running this script."
+  exit 1
+fi
+
 # Set a consistent locale
 export LC_ALL=C
 
