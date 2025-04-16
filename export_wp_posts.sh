@@ -214,7 +214,7 @@ fi
 # Generating Excel Output
 #########################################
 echo "Generating Excel output..."
-python3 - <<EOF
+python3 - <<'EOF'
 try:
     import pandas as pd
     from openpyxl import Workbook
