@@ -66,6 +66,8 @@ EXPECTED_COLUMNS=7
 
 read -p "Enter the base domain (default: example.com): " BASE_DOMAIN
 BASE_DOMAIN=${BASE_DOMAIN:-example.com}
+export BASE_DOMAIN
+
 read -p "Include user export and post counts? (y/n, default: y): " EXPORT_USERS
 EXPORT_USERS=${EXPORT_USERS:-y}
 
@@ -228,7 +230,7 @@ try:
     wb = Workbook()
     ws = wb.active
     ws.title = "export_wp_posts"
-    ws["A1"] = "$BASE_DOMAIN"
+    ws["A1"] = os.environ.get("BASE_DOMAIN")
     ws["A1"].font = Font(bold=True)
     headers = ["url", "ID", "post_title", "post_name", "custom_permalink", "post_date", "post_status", "post_type", "edit WP Admin"]
     ws.append(headers)
