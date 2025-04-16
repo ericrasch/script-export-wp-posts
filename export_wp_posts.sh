@@ -257,7 +257,11 @@ fi
 
 merged_count=$(wc -l < "$FINAL_CSV_FILE")
 custom_count=$(wc -l < "$CUSTOM_PERMALINKS_FILE")
-user_count=$(($(wc -l < "$USERS_WITH_COUNT_FILE") - 1))
+if [[ "$EXPORT_USERS" == "y" || "$EXPORT_USERS" == "Y" ]]; then
+  user_count=$(($(wc -l < "$USERS_WITH_COUNT_FILE") - 1))
+else
+  user_count="N/A"
+fi
 
 echo "✅ Export complete!"
 echo "  - Merged posts file: $FINAL_CSV_FILE"
