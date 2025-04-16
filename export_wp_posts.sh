@@ -220,8 +220,9 @@ try:
     from openpyxl import Workbook
     from openpyxl.styles import Font
     from openpyxl.utils import get_column_letter
-
-    df = pd.read_csv("$FINAL_CSV_FILE")
+    import os
+    csv_file = os.environ.get("FINAL_CSV_FILE")
+    df = pd.read_csv(csv_file)
     wb = Workbook()
     ws = wb.active
     ws.title = "export_wp_posts"
@@ -244,7 +245,8 @@ try:
                 max_len = len(val)
         ws.column_dimensions[get_column_letter(col)].width = max_len + 2
 
-    wb.save("$EXCEL_FILE")
+    excel_file = os.environ.get("EXCEL_FILE")
+    wb.save(excel_file)
 except Exception as e:
     print("❌ Excel generation failed:", e)
     exit(1)
