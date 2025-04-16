@@ -1,2 +1,13 @@
-echo "node_modules/" >> .gitignore
-echo ".DS_Store" >> .gitignore
+# ignore node dependency directories
+node_modules/
+package-lock.json
+build/
+
+# ignore log files and databases
+*.log
+*.sqlite
+
+# other ignores
+.DS_Store
+.private
+.history/
