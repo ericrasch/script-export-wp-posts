@@ -79,6 +79,7 @@ POST_TYPES_LIST=$(IFS=,; echo "${POST_TYPES[*]}")
 > "$CUSTOM_PERMALINKS_FILE"
 [ "$DEBUG" -eq 1 ] && > "$DEBUG_FILE"
 
+
 #########################################
 # Export Posts and Custom Permalink Data
 #########################################
@@ -169,9 +170,15 @@ fi
 # Create a timestamped final merged posts file; remove the un-timestamped version
 mv "$VALIDATED_FILE" "$FINAL_CSV_FILE"
 rm -f "$TEMP_FILE"
+
+
 #########################################
 # Export Users with Post Counts
 #########################################
+
+if [[ "$EXPORT_USERS" == "y" || "$EXPORT_USERS" == "Y" ]]; then
+USERS_FILE="$EXPORT_DIR/export_users.csv"
+USERS_WITH_COUNT_FILE="$EXPORT_DIR/export_users_with_post_counts.csv"
 
 echo "Exporting user data..."
 wp user list --fields=ID,user_login,user_email,first_name,last_name,display_name,roles --format=csv --allow-root > "$USERS_FILE"
