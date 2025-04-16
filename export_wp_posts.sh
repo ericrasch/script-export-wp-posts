@@ -170,6 +170,8 @@ fi
 # Create a timestamped final merged posts file; remove the un-timestamped version
 mv "$VALIDATED_FILE" "$FINAL_CSV_FILE"
 rm -f "$TEMP_FILE"
+export FINAL_CSV_FILE
+export EXCEL_FILE
 
 
 #########################################
