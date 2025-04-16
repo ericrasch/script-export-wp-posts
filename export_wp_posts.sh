@@ -231,10 +231,10 @@ try:
     ws.append(headers)
 
     for idx, row in enumerate(df.itertuples(index=False), start=3):
-        ws.cell(row=idx, column=1).value = f'=IF($E{idx}<>"","https://" & $A$1 & "/" & $E{idx}, "https://" & $A$1 & "/" & $D{idx})'
+        ws.cell(row=idx, column=1).value = f'=IF(E{idx}<>"","https://" & $A$1 & "/" & E{idx}, "https://" & $A$1 & "/" & D{idx})'
         for j, val in enumerate(row, start=2):
             ws.cell(row=idx, column=j, value=val)
-        ws.cell(row=idx, column=9).value = f'=IF($B{idx}<>"", HYPERLINK("https://" & $A$1 & "/wp-admin/post.php?post=" & $B{idx} & "&action=edit", "edit post " & $B{idx}), "")'
+        ws.cell(row=idx, column=9).value = f'=IF(B{idx}<>"", HYPERLINK("https://" & $A$1 & "/wp-admin/post.php?post=" & B{idx} & "&action=edit", "edit post " & B{idx}), "")'
 
     for col in range(1, 11):
         max_len = 0
@@ -258,7 +258,7 @@ fi
 merged_count=$(wc -l < "$FINAL_CSV_FILE")
 custom_count=$(wc -l < "$CUSTOM_PERMALINKS_FILE")
 if [[ "$EXPORT_USERS" == "y" || "$EXPORT_USERS" == "Y" ]]; then
-  user_count=$(($(wc -l < "$USERS_WITH_COUNT_FILE") - 1))
+user_count=$(($(wc -l < "$USERS_WITH_COUNT_FILE") - 1))
 else
   user_count="N/A"
 fi
