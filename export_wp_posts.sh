@@ -183,44 +183,6 @@ export EXCEL_FILE
 
 
 #########################################
-# Export Users with Post Counts
-#########################################
-
-if [[ "$EXPORT_USERS" == "y" || "$EXPORT_USERS" == "Y" ]]; then
-USERS_FILE="$EXPORT_DIR/export_users.csv"
-USERS_WITH_COUNT_FILE="$EXPORT_DIR/export_users_with_post_counts.csv"
-
-echo "Exporting user data..."
-wp user list --fields=ID,user_login,user_email,first_name,last_name,display_name,roles --format=csv --allow-root > "$USERS_FILE"
-if [ $? -ne 0 ]; then
-    echo "❌ Error: WP-CLI user list export failed." >&2
-    exit 1
-fi
-
-if [ ! -s "$USERS_FILE" ]; then
-    echo "❌ Error: User export file is empty. Exiting." >&2
-    exit 1
-fi
-
-echo "Appending post counts to user data..."
-{
-  read -r header
-  echo "$header,post_count"
-  while IFS=, read -r ID user_login user_email first_name last_name display_name roles; do
-      # Count posts for this user across all public post types using the comma-separated list
-      post_count=$(wp post list --author="$ID" --post_type="$POST_TYPES_LIST" --format=count --allow-root)
-      echo "$ID,$user_login,$user_email,$first_name,$last_name,$display_name,$roles,$post_count"
-  done
-} < "$USERS_FILE" > "$USERS_WITH_COUNT_FILE"
-
-if [ ! -s "$USERS_WITH_COUNT_FILE" ]; then
-    echo "❌ Error: User export with post counts is empty." >&2
-    exit 1
-fi
-fi
-
-
-#########################################
 # Generating Excel Output
 #########################################
 echo "Generating Excel output..."
@@ -266,6 +228,49 @@ if [ $? -ne 0 ]; then
     echo "❌ Error: Excel export failed. Check Python and dependencies." >&2
     exit 1
 fi
+
+
+#########################################
+# Export Users with Post Counts
+#########################################
+
+if [[ "$EXPORT_USERS" == "y" || "$EXPORT_USERS" == "Y" ]]; then
+USERS_FILE="$EXPORT_DIR/export_users.csv"
+USERS_WITH_COUNT_FILE="$EXPORT_DIR/export_users_with_post_counts.csv"
+
+echo "Exporting user data..."
+wp user list --fields=ID,user_login,user_email,first_name,last_name,display_name,roles --format=csv --allow-root > "$USERS_FILE"
+if [ $? -ne 0 ]; then
+    echo "❌ Error: WP-CLI user list export failed." >&2
+    exit 1
+fi
+
+if [ ! -s "$USERS_FILE" ]; then
+    echo "❌ Error: User export file is empty. Exiting." >&2
+    exit 1
+fi
+
+echo "Appending post counts to user data..."
+{
+  read -r header
+  echo "$header,post_count"
+  while IFS=, read -r ID user_login user_email first_name last_name display_name roles; do
+      # Count posts for this user across all public post types using the comma-separated list
+      post_count=$(wp post list --author="$ID" --post_type="$POST_TYPES_LIST" --format=count --allow-root)
+      echo "$ID,$user_login,$user_email,$first_name,$last_name,$display_name,$roles,$post_count"
+  done
+} < "$USERS_FILE" > "$USERS_WITH_COUNT_FILE"
+
+if [ ! -s "$USERS_WITH_COUNT_FILE" ]; then
+    echo "❌ Error: User export with post counts is empty." >&2
+    exit 1
+fi
+fi
+
+
+#########################################
+# Final Cleanup and Summary 
+#########################################
 
 merged_count=$(wc -l < "$FINAL_CSV_FILE")
 custom_count=$(wc -l < "$CUSTOM_PERMALINKS_FILE")
