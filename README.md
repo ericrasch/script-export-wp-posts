@@ -44,7 +44,7 @@ pip install pandas openpyxl
 ## **How It Works**
 
 1. ✅ Verifies `wp` is installed  
-2. ✅ Prompts for your base domain (e.g., `sleepfoundation.org`)  
+2. ✅ Prompts for your base domain (e.g., `example.com` or `your-domain.com`)  
 3. ✅ Prompts to include user data (defaults to **yes**)  
 4. ✅ Gathers post data for all public post types (excluding attachments)  
 5. ✅ Retrieves `custom_permalink` meta (if used)  
