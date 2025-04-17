@@ -3,6 +3,8 @@
 ## **Overview**  
 This script automates the export of **WordPress posts, custom permalinks, and optional user data** using **WP-CLI** and produces both CSV and Excel (.xlsx) files ready for import into tools like Google Sheets.
 
+![CleanShot 2025-04-16 at 11 52 09](https://github.com/user-attachments/assets/0289ce1c-5d1e-4fd7-92ee-23c87546e33d)
+
 It is designed to:
 - Merge all post-related data into a single master file
 - Include hyperlinks and formulas
