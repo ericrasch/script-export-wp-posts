@@ -58,11 +58,18 @@ if [ ${#SSH_HOSTS[@]} -gt 0 ]; then
         SSH_CONNECTION="${SSH_HOSTS[$((HOST_CHOICE-1))]}"
         echo -e "${GREEN}Using: $SSH_CONNECTION${NC}"
         
-        # Auto-detect common paths
-        if [[ "$SSH_CONNECTION" =~ pressable ]]; then
+        # Auto-detect common paths based on hostname patterns
+        if [[ "$SSH_CONNECTION" =~ press ]] || [[ "$SSH_CONNECTION" =~ pressable ]]; then
             SUGGESTED_PATH="/htdocs"
-        elif [[ "$SSH_CONNECTION" =~ wpengine ]]; then
-            SUGGESTED_PATH="/home/wpe-user/sites/${SSH_CONNECTION%%.*}"
+        elif [[ "$SSH_CONNECTION" =~ wpe ]] || [[ "$SSH_CONNECTION" =~ wpengine ]]; then
+            # Extract site name from SSH config name
+            SITE_NAME="${SSH_CONNECTION#wpe-}"
+            SITE_NAME="${SITE_NAME%%.*}"
+            SUGGESTED_PATH="/home/wpe-user/sites/$SITE_NAME"
+        elif [[ "$SSH_CONNECTION" =~ kinsta ]]; then
+            SUGGESTED_PATH="/www/[sitename]_[id]/public"
+        elif [[ "$SSH_CONNECTION" =~ siteground ]]; then
+            SUGGESTED_PATH="~/public_html"
         else
             SUGGESTED_PATH="~/public_html"
         fi
@@ -77,6 +84,15 @@ fi
 
 # Get WordPress path
 if [ -n "$SUGGESTED_PATH" ]; then
+    # Show detected host type for clarity
+    if [[ "$SSH_CONNECTION" =~ press ]]; then
+        echo -e "${YELLOW}Detected: Pressable host${NC}"
+    elif [[ "$SSH_CONNECTION" =~ wpe ]]; then
+        echo -e "${YELLOW}Detected: WP Engine host${NC}"
+    elif [[ "$SSH_CONNECTION" =~ kinsta ]]; then
+        echo -e "${YELLOW}Detected: Kinsta host${NC}"
+    fi
+    
     read -rp "Enter WordPress path (suggested: $SUGGESTED_PATH): " WP_PATH
     WP_PATH=${WP_PATH:-$SUGGESTED_PATH}
 else
