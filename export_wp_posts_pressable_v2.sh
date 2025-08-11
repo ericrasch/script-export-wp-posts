@@ -3,10 +3,40 @@
 # Script Name: export_wp_posts_pressable_v2.sh
 #
 # Description:
-#   Improved version for Pressable and restricted hosts that exports all
-#   columns and post types from the original script.
+#   Exports WordPress posts and custom permalink information via SSH from
+#   remote servers, designed for restricted environments like Pressable.
+#   
+#   Merges data into a final CSV with columns in the order:
+#   ID, post_title, post_name, custom_permalink, post_date, post_status, post_type.
 #
+#   Additionally exports WordPress users with their details and post counts 
+#   across all public post types (excluding attachments).
+#
+#   Generates a final Excel (.xlsx) file with:
+#     - Row 1: editable base domain
+#     - Row 2: headers  
+#     - Column A: formula-generated URLs
+#     - Column I: WP Admin edit links
+#
+# Author: Eric Rasch (based on original export_wp_posts.sh)
+# Date Created: 2025-08-11
+# Last Modified: 2025-08-11
 # Version: 2.0-pressable
+# 
+# Usage:
+#   1. Run: ./export_wp_posts_pressable_v2.sh
+#   2. Select SSH host from config or enter manually
+#   3. Confirm WordPress path
+#   4. Enter base domain and export options
+#
+# Output Files (in timestamped directory):
+#   - export_all_posts.csv: Exported post details
+#   - export_custom_permalinks.csv: Exported custom_permalink data
+#   - export_wp_posts_<timestamp>.csv: Final merged posts file
+#   - export_wp_posts_<timestamp>.xlsx: Final Excel file with formulas
+#   - export_users.csv: Raw export of user details
+#   - export_users_with_post_counts.csv: Users with post counts
+#   - export_debug_log.txt: Debug log (if DEBUG mode enabled)
 ################################################################################
 
 set -euo pipefail
@@ -117,6 +147,10 @@ DEBUG_FILE="$EXPORT_DIR/export_debug_log.txt"
 
 echo -e "\n${YELLOW}Discovering post types...${NC}"
 
+#########################################
+# Discover Post Types
+#########################################
+
 # Initialize POST_TYPES array
 POST_TYPES=()
 
@@ -205,6 +239,10 @@ fi
 
 echo "Will export post types: ${POST_TYPES[*]}"
 
+#########################################
+# Export Posts and Custom Permalink Data
+#########################################
+
 # Export posts with all required fields
 POST_FILE="$EXPORT_DIR/export_all_posts.csv"
 echo "ID,post_title,post_name,post_date,post_status,post_type" > "$POST_FILE"
@@ -239,7 +277,10 @@ for post_type in "${POST_TYPES[@]}"; do
     ssh -T "$SSH_CONNECTION" "cd $WP_PATH && wp post list --post_type=$post_type --post_status=any --fields=ID,custom_permalink --meta_key=custom_permalink --format=csv --quiet 2>/dev/null | tail -n +2" >> "$PERMALINK_FILE" 2>/dev/null || true
 done
 
-# Process and merge data
+#########################################
+# Merge and Process Data  
+#########################################
+
 echo -e "\n${YELLOW}Processing data...${NC}"
 
 # Create final CSV with all 7 columns
@@ -280,7 +321,10 @@ custom_count=$(( $(wc -l < "$PERMALINK_FILE") - 1 ))
 # Note: Will set user_count later if users are exported
 echo -e "\n${YELLOW}Preparing final report...${NC}"
 
-# Export users if requested
+#########################################
+# Export Users with Post Counts
+#########################################
+
 if [[ "$EXPORT_USERS" == "y" || "$EXPORT_USERS" == "Y" ]]; then
     USERS_FILE="$EXPORT_DIR/export_users.csv"
     USERS_WITH_COUNT_FILE="$EXPORT_DIR/export_users_with_post_counts.csv"
@@ -313,17 +357,34 @@ if [[ "$EXPORT_USERS" == "y" || "$EXPORT_USERS" == "Y" ]]; then
     fi
 fi
 
-# Generate Excel file
+#########################################
+# Generating Excel Output
+#########################################
+
 echo -e "\n${YELLOW}Generating Excel file...${NC}"
 
-# First, let's try to find a working Python with openpyxl
+# Get script directory for virtual environment
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+VENV_DIR="$SCRIPT_DIR/.venv"
+
+# First check if we have a virtual environment with openpyxl
 PYTHON_CMD=""
-for cmd in python3 python /usr/bin/python3 /usr/local/bin/python3; do
-    if command -v $cmd &> /dev/null && $cmd -c "import openpyxl" 2>/dev/null; then
-        PYTHON_CMD=$cmd
-        break
+if [ -d "$VENV_DIR" ] && [ -f "$VENV_DIR/bin/python" ]; then
+    if "$VENV_DIR/bin/python" -c "import openpyxl" 2>/dev/null; then
+        PYTHON_CMD="$VENV_DIR/bin/python"
+        echo "Using virtual environment for Excel generation..."
     fi
-done
+fi
+
+# If no venv, try system Python installations
+if [ -z "$PYTHON_CMD" ]; then
+    for cmd in python3 python /usr/bin/python3 /usr/local/bin/python3; do
+        if command -v $cmd &> /dev/null && $cmd -c "import openpyxl" 2>/dev/null; then
+            PYTHON_CMD=$cmd
+            break
+        fi
+    done
+fi
 
 if [ -n "$PYTHON_CMD" ]; then
     cat > "$EXPORT_DIR/convert_to_excel.py" << EOF
@@ -381,17 +442,24 @@ EOF
     $PYTHON_CMD "$EXPORT_DIR/convert_to_excel.py" 2>/dev/null && {
         echo -e "${GREEN}Excel file created: export_wp_posts_${timestamp}.xlsx${NC}"
     } || {
-        echo -e "${YELLOW}Excel generation skipped (openpyxl not available)${NC}"
-        echo "To enable Excel export, install openpyxl:"
-        echo "  1. Create a virtual environment: python3 -m venv ~/venv"
-        echo "  2. Activate it: source ~/venv/bin/activate"
-        echo "  3. Install: pip install openpyxl"
-        echo "  4. Run: python ~/venv/bin/python $EXPORT_DIR/convert_to_excel.py"
+        echo -e "${YELLOW}Excel generation failed${NC}"
     }
 else
-    echo -e "${YELLOW}Python not found. Excel generation skipped.${NC}"
-    echo "CSV file contains all data and can be opened in Excel/Google Sheets."
+    echo -e "${YELLOW}Excel support not configured.${NC}"
+    echo ""
+    echo "To enable automatic Excel generation, run:"
+    echo -e "  ${GREEN}./install_excel_support.sh${NC}"
+    echo ""
+    echo "Or manually install openpyxl:"
+    echo "  1. brew install python-openpyxl"
+    echo "  2. Or use pipx: pipx install openpyxl"
+    echo ""
+    echo "The CSV file contains all data and can be opened in Excel/Google Sheets."
 fi
+
+#########################################
+# Final Cleanup and Summary 
+#########################################
 
 # Final summary report with all details
 EXCEL_FILE="$EXPORT_DIR/export_wp_posts_${timestamp}.xlsx"
