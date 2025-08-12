@@ -175,3 +175,64 @@ MIT License - see LICENSE file for details
 
 Eric Rasch  
 GitHub: https://github.com/ericrasch/script-export-wp-posts
+
+## Future Enhancements (TODO)
+
+### 1. Configuration File Support
+- Save settings the first time a user runs the script
+- Incrementally add domains to the configuration file as they're used
+- Present previously used domains as options when script is rerun
+- Save SSH favorites from recently used connections
+- Include last exported date for each domain
+
+### 2. Export Profiles/Templates
+- Add ability to save and reuse export configurations (e.g., `--profile seo-audit`)
+- Different profiles for different use cases (migration, audit, backup)
+
+### 3. Incremental/Delta Exports
+- Export only posts modified since last export
+- Options like `--since "2025-08-01"` or `--since-last-export`
+
+### 4. Additional Export Formats
+- JSON export for programmatic processing
+- SQL export for direct database dumps
+- Markdown export for documentation
+
+### 5. Enhanced Error Recovery
+- Automatic retry on SSH connection failures
+- Resume capability for interrupted exports
+- Better timeout handling for large sites
+
+### 6. Export Validation & Reports
+- Check for broken internal links
+- Identify missing featured images
+- Find duplicate slugs/permalinks
+- Generate summary reports with potential issues
+
+### 7. Bulk Operations Support
+- Export from multiple sites in one run
+- Support for batch configuration files
+
+### 8. Custom Field Support
+- Export specific custom fields/meta data
+- Option like `--meta-keys "seo_title,seo_description"`
+
+### 9. Performance Enhancements
+- Parallel processing for large exports
+- Compression of export files
+- Option to exclude post content for faster exports
+
+### 10. Integration Features
+- Webhook notifications on completion
+- Direct upload to Google Drive/Dropbox
+- Email export results
+
+### 11. Data Transformation Options
+- Convert relative URLs to absolute
+- Strip HTML from titles/content
+- Normalize date formats
+
+### 12. Security Enhancements
+- Encrypted exports for sensitive data
+- Audit log of exports
+- Option to redact personal data
