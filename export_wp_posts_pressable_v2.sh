@@ -135,9 +135,11 @@ BASE_DOMAIN=${BASE_DOMAIN:-example.com}
 read -rp "Include user export? (y/n, default: y): " EXPORT_USERS
 EXPORT_USERS=${EXPORT_USERS:-y}
 
-# Create local directory
+# Create local directory with domain name
 timestamp=$(date +"%Y%m%d_%H%M%S")
-EXPORT_DIR="!export_wp_posts_${timestamp}"
+# Sanitize domain name for filesystem (replace . with -, remove protocol if present)
+DOMAIN_SAFE=$(echo "$BASE_DOMAIN" | sed 's|https\?://||' | sed 's|/.*||' | tr '.' '-' | tr '[:upper:]' '[:lower:]')
+EXPORT_DIR="!export_wp_posts_${timestamp}_${DOMAIN_SAFE}"
 mkdir -p "$EXPORT_DIR"
 
 # Define file paths
