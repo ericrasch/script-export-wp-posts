@@ -1,38 +1,55 @@
 #!/bin/bash
-echo "Setting up Excel export support..."
+echo "=== Setting up Excel Export Support ==="
+echo ""
+echo "This script installs openpyxl for Excel generation."
+echo ""
 
-# Try different installation methods
-echo "Method 1: Trying pipx..."
-if command -v pipx &> /dev/null; then
-    pipx install openpyxl
-    echo "✅ Installed via pipx"
+# Detect Python command
+PYTHON_CMD=""
+for cmd in python3 /usr/bin/python3 /usr/local/bin/python3 /opt/homebrew/bin/python3; do
+    if command -v $cmd &> /dev/null; then
+        PYTHON_CMD=$cmd
+        break
+    fi
+done
+
+if [ -z "$PYTHON_CMD" ]; then
+    echo "❌ Python 3 is not installed."
+    echo "Please install Python 3 first (e.g., brew install python@3)"
+    exit 1
+fi
+
+echo "Using Python: $PYTHON_CMD"
+
+# Check if openpyxl is already installed
+if $PYTHON_CMD -c "import openpyxl" 2>/dev/null; then
+    echo "✅ openpyxl is already installed!"
+    echo ""
+    echo "Excel export is ready to use."
     exit 0
 fi
 
-echo "Method 2: Trying Homebrew..."
-if command -v brew &> /dev/null; then
-    brew install python-openpyxl 2>/dev/null && {
-        echo "✅ Installed via Homebrew"
-        exit 0
-    }
-fi
+# Install openpyxl with --user and --break-system-packages flags
+echo "Installing openpyxl for current user..."
+echo "(This will not affect your system Python installation)"
+echo ""
 
-echo "Method 3: Creating virtual environment..."
-SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-cd "$SCRIPT_DIR"
-
-python3 -m venv .venv
-source .venv/bin/activate
-pip install --upgrade pip
-pip install openpyxl
-
-if [ $? -eq 0 ]; then
+if $PYTHON_CMD -m pip install --user --break-system-packages openpyxl 2>/dev/null || \
+   $PYTHON_CMD -m pip install --user openpyxl 2>/dev/null; then
+    echo "✅ openpyxl installed successfully!"
     echo ""
-    echo "✅ Virtual environment created with openpyxl"
+    echo "✅ Excel export support is now enabled!"
+    echo "The package was installed in your user directory: ~/.local/"
     echo ""
-    echo "Excel export will now work automatically!"
+    echo "You can now run the export script and Excel files will be generated."
 else
-    echo "❌ Failed to install. Please try manually:"
-    echo "  brew install pipx"
-    echo "  pipx install openpyxl"
+    echo "❌ Failed to install openpyxl"
+    echo ""
+    echo "Alternative: Create a virtual environment:"
+    echo "1. python3 -m venv ~/excel_env"
+    echo "2. source ~/excel_env/bin/activate"
+    echo "3. pip install openpyxl"
+    echo ""
+    echo "Then run the export script while the virtual environment is active."
+    exit 1
 fi

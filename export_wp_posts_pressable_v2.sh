@@ -363,28 +363,22 @@ fi
 
 echo -e "\n${YELLOW}Generating Excel file...${NC}"
 
-# Get script directory for virtual environment
-SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-VENV_DIR="$SCRIPT_DIR/.venv"
-
-# First check if we have a virtual environment with openpyxl
+# Try to find Python with openpyxl installed
 PYTHON_CMD=""
-if [ -d "$VENV_DIR" ] && [ -f "$VENV_DIR/bin/python" ]; then
-    if "$VENV_DIR/bin/python" -c "import openpyxl" 2>/dev/null; then
-        PYTHON_CMD="$VENV_DIR/bin/python"
-        echo "Using virtual environment for Excel generation..."
-    fi
-fi
 
-# If no venv, try system Python installations
-if [ -z "$PYTHON_CMD" ]; then
-    for cmd in python3 python /usr/bin/python3 /usr/local/bin/python3; do
-        if command -v $cmd &> /dev/null && $cmd -c "import openpyxl" 2>/dev/null; then
+# Check various Python installations
+for cmd in python3 /usr/bin/python3 /usr/local/bin/python3 /opt/homebrew/bin/python3; do
+    if command -v $cmd &> /dev/null; then
+        # Set PYTHONPATH to include user site-packages
+        export PYTHONPATH="$HOME/.local/lib/python3.*/site-packages:${PYTHONPATH:-}"
+        # Check if openpyxl is available (system, user, or any location)
+        if $cmd -c "import openpyxl" 2>/dev/null; then
             PYTHON_CMD=$cmd
+            echo "Using Python with openpyxl: $cmd"
             break
         fi
-    done
-fi
+    fi
+done
 
 if [ -n "$PYTHON_CMD" ]; then
     cat > "$EXPORT_DIR/convert_to_excel.py" << EOF
@@ -448,11 +442,10 @@ else
     echo -e "${YELLOW}Excel support not configured.${NC}"
     echo ""
     echo "To enable automatic Excel generation, run:"
-    echo -e "  ${GREEN}./install_excel_support.sh${NC}"
+    echo -e "  ${GREEN}./enable_excel.sh${NC}"
     echo ""
     echo "Or manually install openpyxl:"
-    echo "  1. brew install python-openpyxl"
-    echo "  2. Or use pipx: pipx install openpyxl"
+    echo "  brew install python-openpyxl"
     echo ""
     echo "The CSV file contains all data and can be opened in Excel/Google Sheets."
 fi
