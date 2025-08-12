@@ -176,6 +176,8 @@ EXPORT_USERS=${EXPORT_USERS:-y}
 
 # Create local directory with domain name
 timestamp=$(date +"%Y%m%d_%H%M%S")
+# Create sheet-friendly timestamp format
+sheet_timestamp=$(date +"%Y-%m-%d_%H%M%S")
 # Sanitize domain name for filesystem (replace . with -, remove protocol if present)
 DOMAIN_SAFE=$(echo "$BASE_DOMAIN" | sed 's|https\?://||' | sed 's|/.*||' | tr '.' '-' | tr '[:upper:]' '[:lower:]')
 EXPORT_DIR="!export_wp_posts_${timestamp}_${DOMAIN_SAFE}"
@@ -584,7 +586,7 @@ from openpyxl.utils import get_column_letter
 
 wb = Workbook()
 ws = wb.active
-ws.title = "export_wp_posts"
+ws.title = "${DOMAIN_SAFE}_${sheet_timestamp}"
 
 # Add base domain
 ws["A1"] = "$BASE_DOMAIN"
