@@ -127,39 +127,80 @@ if [ ! -s "$CUSTOM_PERMALINKS_FILE" ]; then
     echo "Warning: $CUSTOM_PERMALINKS_FILE is empty. No custom permalinks found." >&2
 fi
 
-echo "Merging posts data using AWK..."
-awk -F',' -v debug="$DEBUG" '
-    NR==FNR {
-        # Read custom permalinks: key = post ID, value = custom_permalink
-        perm[$1] = $2;
-        next;
-    }
-    {
-        id = $1;
-        n = NF;
-        # Assume fields are:
-        # 1: ID, 2 to (n-4): post_title, (n-3): post_name, (n-2): post_date, (n-1): post_status, n: post_type
-        post_name   = $(n-3);
-        post_date   = $(n-2);
-        post_status = $(n-1);
-        post_type   = $(n);
-        # Reassemble post_title from fields 2 through (n-4)
-        title = $2;
-        for(i = 3; i <= n-4; i++){
-            title = title " " $i;
-        }
-        # Remove any commas from post_title (sanitizing special characters)
-        gsub(/,/, "", title);
-        # Retrieve custom_permalink (if any)
-        custom = (id in perm) ? perm[id] : "";
-        if(debug=="1") {
-            print "DEBUG: Processing ID: " id > "/dev/stderr"
+echo "Merging posts data using improved CSV parser..."
+# Use perl for reliable CSV parsing (perl is always available on macOS)
+perl -e '
+use strict;
+use warnings;
+
+# Simple CSV parser that handles quoted fields
+sub parse_csv_line {
+    my $line = shift;
+    my @fields = ();
+    my $field = "";
+    my $in_quotes = 0;
+    
+    for (my $i = 0; $i < length($line); $i++) {
+        my $char = substr($line, $i, 1);
+        
+        if ($char eq "\"") {
+            if ($in_quotes && $i + 1 < length($line) && substr($line, $i + 1, 1) eq "\"") {
+                $field .= "\"";
+                $i++;
+            } else {
+                $in_quotes = !$in_quotes;
+            }
+        } elsif ($char eq "," && !$in_quotes) {
+            push @fields, $field;
+            $field = "";
         } else {
-            print "Processed row: " id > "/dev/stderr"
+            $field .= $char;
         }
-        # Output merged row: ID, post_title, post_name, custom_permalink, post_date, post_status, post_type
-        print id "," title "," post_name "," custom "," post_date "," post_status "," post_type;
     }
+    push @fields, $field;
+    
+    return @fields;
+}
+
+# Read custom permalinks
+my %permalinks;
+open(my $perm_fh, "<", $ARGV[0]) or die "Cannot open permalinks file: $!";
+my $header = <$perm_fh>;
+while (my $line = <$perm_fh>) {
+    chomp $line;
+    my @fields = parse_csv_line($line);
+    $permalinks{$fields[0]} = $fields[1] if @fields >= 2;
+}
+close($perm_fh);
+
+# Process posts
+open(my $posts_fh, "<", $ARGV[1]) or die "Cannot open posts file: $!";
+$header = <$posts_fh>;  # Skip header
+while (my $line = <$posts_fh>) {
+    chomp $line;
+    my @fields = parse_csv_line($line);
+    
+    if (@fields >= 6) {
+        my $id = $fields[0];
+        my $title = $fields[1];
+        my $post_name = $fields[2];
+        my $post_date = $fields[3];
+        my $post_status = $fields[4];
+        my $post_type = $fields[5];
+        
+        # Remove commas from title
+        $title =~ s/,//g;
+        
+        # Get custom permalink
+        my $custom = $permalinks{$id} || "";
+        
+        # Output CSV line
+        print "$id,$title,$post_name,$custom,$post_date,$post_status,$post_type\n";
+        
+        print STDERR "Processed row: $id\n" if $ENV{DEBUG};
+    }
+}
+close($posts_fh);
 ' "$CUSTOM_PERMALINKS_FILE" "$ALL_POSTS_FILE" > "$TEMP_FILE"
 
 if [ ! -s "$TEMP_FILE" ]; then
