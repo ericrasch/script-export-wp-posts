@@ -1,6 +1,13 @@
 # WordPress Export Script
 
-A unified shell script that exports WordPress posts, custom permalinks, and users from WordPress sites - either locally or remotely via SSH. Generates both CSV and Excel files for SEO audits and data analysis.
+A powerful shell script that exports WordPress posts, custom permalinks, and users from WordPress sites - either locally or remotely via SSH. Generates both CSV and Excel files for SEO audits and data analysis.
+
+## Key Features
+- ✅ **Proper CSV Handling**: Correctly handles posts with commas, quotes, and special characters in titles
+- 🔄 **Unified Operation**: Single script for both local and remote exports
+- 📊 **Excel Generation**: Automatic conversion with clickable URLs and admin links
+- 🔍 **Dynamic Discovery**: Automatically finds all public post types
+- 🌐 **Multi-Host Support**: Works with Pressable, WP Engine, Kinsta, and more
 
 ![CleanShot 2025-04-16 at 11 52 09](https://github.com/user-attachments/assets/0289ce1c-5d1e-4fd7-92ee-23c87546e33d)
 
@@ -20,14 +27,14 @@ A unified shell script that exports WordPress posts, custom permalinks, and user
 
 ### Local Export (when you're in the WordPress directory)
 ```bash
-./export_wp_posts_unified.sh
+./export_wp_posts.sh
 ```
 
 ### Remote Export (via SSH)
 ```bash
-./export_wp_posts_unified.sh --remote
+./export_wp_posts.sh --remote
 # or
-./export_wp_posts_unified.sh -r
+./export_wp_posts.sh -r
 ```
 
 ### Setup Excel Support
@@ -139,19 +146,22 @@ DEBUG=1
 ### Local WordPress Export
 ```bash
 cd /var/www/mysite
-./export_wp_posts_unified.sh
+./export_wp_posts.sh
 # Enter domain: mysite.com
 # Include users? y
 ```
 
 ### Remote Pressable Export
 ```bash
-./export_wp_posts_unified.sh --remote
+./export_wp_posts.sh --remote
 # Select host: 1 (pressable-site)
 # Confirm path: /htdocs
 # Enter domain: client-site.com
 # Include users? n
 ```
+
+### Legacy Script
+The original local-only script is preserved as `export_wp_posts_legacy.sh` for reference.
 
 ## Contributing
 

@@ -4,43 +4,45 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a Bash shell script project that exports WordPress data using WP-CLI. The main script `export_wp_posts_unified.sh` can run either locally or remotely via SSH, generating CSV and Excel files containing posts, custom permalinks, and optionally user data for SEO audits and data analysis.
+This is a Bash shell script project that exports WordPress data using WP-CLI. The main script `export_wp_posts.sh` can run either locally or remotely via SSH, generating CSV and Excel files containing posts, custom permalinks, and optionally user data for SEO audits and data analysis.
+
+**Important Note**: The script was previously named `export_wp_posts_unified_v2.sh` but has been renamed to `export_wp_posts.sh` as the primary script. The original local-only script is preserved as `export_wp_posts_legacy.sh`.
 
 ## Key Commands
 
 ### Running the Script
 
-The unified script (`export_wp_posts_unified.sh`) supports both local and remote exports:
+The main script (`export_wp_posts.sh`) supports both local and remote exports:
 
 ```bash
 # Make executable (if needed)
-chmod +x export_wp_posts_unified.sh
+chmod +x export_wp_posts.sh
 
 # Local export (run from WordPress root directory)
-./export_wp_posts_unified.sh
+./export_wp_posts.sh
 
 # Remote export (via SSH)
-./export_wp_posts_unified.sh --remote
+./export_wp_posts.sh --remote
 # or
-./export_wp_posts_unified.sh -r
+./export_wp_posts.sh -r
 
 # Run with user export disabled (answer 'n' when prompted)
-./export_wp_posts_unified.sh
+./export_wp_posts.sh
 ```
 
 ### Development and Testing
 ```bash
 # Check script syntax
-bash -n export_wp_posts_unified.sh
+bash -n export_wp_posts.sh
 
 # Run with debug output
-bash -x export_wp_posts_unified.sh
+bash -x export_wp_posts.sh
 
 # Test locally in a WordPress directory
-cd /path/to/wordpress && /path/to/script/export_wp_posts_unified.sh
+cd /path/to/wordpress && /path/to/script/export_wp_posts.sh
 
 # Test remote export
-./export_wp_posts_unified.sh --remote
+./export_wp_posts.sh --remote
 ```
 
 ### Setup Excel Support
@@ -52,7 +54,7 @@ cd /path/to/wordpress && /path/to/script/export_wp_posts_unified.sh
 ## Architecture and Key Components
 
 ### Script Structure
-The `export_wp_posts_unified.sh` script follows this execution flow:
+The `export_wp_posts.sh` script follows this execution flow:
 1. **Environment Validation**: Checks for WP-CLI installation and WordPress directory
 2. **Post Type Discovery**: Dynamically identifies all public post types (excluding attachments)
 3. **Data Export**: Uses WP-CLI to export posts with ID, title, URL, and custom permalinks
@@ -87,20 +89,43 @@ if ! command_exists wp; then
 fi
 ```
 
-### Data Processing with AWK
-Complex data merging handles titles with commas:
-```bash
-awk -F',' '{
-    n = NF;
-    # Fields: 1: ID, 2 to (n-4): post_title, (n-3): post_name, (n-2): post_date, (n-1): post_status, n: post_type
-    # Reassemble title from multiple fields if it contains commas
-    title = $2;
-    for(i = 3; i <= n-4; i++){
-        title = title " " $i;
+### Data Processing with Perl
+Robust CSV parsing that properly handles quoted fields:
+```perl
+# Simple CSV parser that handles quoted fields
+sub parse_csv_line {
+    my $line = shift;
+    my @fields = ();
+    my $field = "";
+    my $in_quotes = 0;
+    
+    for (my $i = 0; $i < length($line); $i++) {
+        my $char = substr($line, $i, 1);
+        
+        if ($char eq "\"") {
+            if ($in_quotes && $i + 1 < length($line) && substr($line, $i + 1, 1) eq "\"") {
+                $field .= "\"";
+                $i++;
+            } else {
+                $in_quotes = !$in_quotes;
+            }
+        } elsif ($char eq "," && !$in_quotes) {
+            push @fields, $field;
+            $field = "";
+        } else {
+            $field .= $char;
+        }
     }
-    gsub(/,/, "", title); # Remove commas after reassembly
-}'
+    push @fields, $field;
+    
+    return @fields;
+}
 ```
+
+This parser correctly handles:
+- Fields with commas inside quotes (e.g., "Sleep, Work, and COVID-19: In-Depth Study")
+- Escaped quotes within quoted fields
+- Mixed quoted and unquoted fields
 
 ### Excel Generation
 Python is used for Excel conversion with formula support:
