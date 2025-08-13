@@ -1,7 +1,7 @@
 
 #!/bin/bash
 ################################################################################
-# Script Name: export_wp_posts.sh
+# Script Name: export_wp_posts_legacy.sh
 #
 # Description:
 #   Exports WordPress posts and custom permalink information using wp-cli,
