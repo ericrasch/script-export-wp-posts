@@ -36,7 +36,7 @@ A powerful shell script that exports WordPress posts, custom permalinks, and use
 # or
 ./export_wp_posts.sh -r
 ```
-
+./export_wp_posts.sh
 ### Setup Excel Support
 ```bash
 ./enable_excel.sh
