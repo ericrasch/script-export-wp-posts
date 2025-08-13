@@ -474,7 +474,7 @@ else
     # Method 1: Simple approach
     echo "Method 1: Trying standard discovery..."
     POST_TYPES_RAW=$(ssh -T -o ServerAliveInterval=5 -o ServerAliveCountMax=3 "$SSH_CONNECTION" \
-        "cd $WP_PATH && wp post-type list --field=name --public=true --format=csv 2>/dev/null" 2>/dev/null || echo "")
+        "cd \"$WP_PATH\" && wp post-type list --field=name --public=true --format=csv 2>/dev/null" 2>/dev/null || echo "")
     
     # Clean output
     POST_TYPES_RAW=$(echo "$POST_TYPES_RAW" | tr -d '\r' | grep -v "^$" | grep -v "Connection")
