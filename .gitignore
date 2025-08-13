@@ -11,3 +11,9 @@ build/
 .DS_Store
 .private
 .history/
+
+# export directories
+\!export_wp_posts_*
+
+# config directory
+.config/
