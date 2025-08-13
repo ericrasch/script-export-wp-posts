@@ -592,7 +592,7 @@ for post_type in "${POST_TYPES[@]}"; do
     else
         # Remote export
         EXPORT_OUTPUT=$(ssh -T -o ServerAliveInterval=5 -o ServerAliveCountMax=3 -o ConnectTimeout=30 "$SSH_CONNECTION" \
-            "cd $WP_PATH && wp post list --post_type=$post_type --post_status=any --fields=ID,post_title,post_name,post_date,post_status,post_type --format=csv 2>/dev/null" 2>/dev/null || echo "FAILED")
+            "cd \"$WP_PATH\" && wp post list --post_type=$post_type --post_status=any --fields=ID,post_title,post_name,post_date,post_status,post_type --format=csv 2>/dev/null" 2>/dev/null || echo "FAILED")
         
         if [[ "$EXPORT_OUTPUT" != "FAILED" ]] && [[ -n "$EXPORT_OUTPUT" ]]; then
             echo "$EXPORT_OUTPUT" | tail -n +2 >> "$ALL_POSTS_FILE"
