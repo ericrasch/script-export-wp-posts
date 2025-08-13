@@ -627,7 +627,7 @@ for post_type in "${POST_TYPES[@]}"; do
         fi
     else
         # Remote export
-        ssh -T "$SSH_CONNECTION" "cd $WP_PATH && wp post list --post_type=$post_type --post_status=any --fields=ID,custom_permalink --meta_key=custom_permalink --format=csv --quiet 2>/dev/null | tail -n +2" >> "$CUSTOM_PERMALINKS_FILE" 2>/dev/null || true
+        ssh -T "$SSH_CONNECTION" "cd \"$WP_PATH\" && wp post list --post_type=\"$post_type\" --post_status=any --fields=ID,custom_permalink --meta_key=custom_permalink --format=csv --quiet 2>/dev/null | tail -n +2" >> "$CUSTOM_PERMALINKS_FILE" 2>/dev/null || true
     fi
 done
 
