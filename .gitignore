@@ -14,3 +14,6 @@ build/
 
 # export directories
 \!export_wp_posts_*
+
+# config directory
+.config/

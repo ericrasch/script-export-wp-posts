@@ -1,6 +1,6 @@
 #!/bin/bash
 ################################################################################
-# Script Name: export_wp_posts_unified.sh
+# Script Name: export_wp_posts.sh
 #
 # Description:
 #   Unified WordPress export script that can run either locally or via SSH.
@@ -20,12 +20,11 @@
 # Author: Eric Rasch
 #   GitHub: https://github.com/ericrasch/script-export-wp-posts
 # Date Created: 2025-08-11
-# Last Modified: 2025-08-11
-# Version: 3.0-unified
+# Last Modified: 2025-08-12
+# Version: 4.0
 # 
 # Usage:
-#   Local:  ./export_wp_posts_unified.sh
-#   Remote: ./export_wp_posts_unified.sh --remote
+#   ./export_wp_posts.sh
 #
 # Output Files (in timestamped directory with domain name):
 #   - export_all_posts.csv: Exported post details
@@ -35,6 +34,10 @@
 #   - export_users.csv: Raw export of user details
 #   - export_users_with_post_counts.csv: Users with post counts
 #   - export_debug_log.txt: Debug log (if DEBUG mode enabled)
+#
+# Configuration:
+#   Config file is stored at .config/wp-export-config.json in the script directory
+#   Stores recent domains, SSH connections, and export statistics
 ################################################################################
 
 set -euo pipefail
@@ -52,9 +55,190 @@ YELLOW='\033[1;33m'
 RED='\033[0;31m'
 NC='\033[0m'
 
-# Check if running in remote mode
+# Configuration directory and file
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+CONFIG_DIR="$SCRIPT_DIR/.config"
+CONFIG_FILE="$CONFIG_DIR/wp-export-config.json"
+MAX_RECENT_DOMAINS=10
+MAX_SSH_FAVORITES=10
+
+#########################################
+# Configuration Functions
+#########################################
+
+# Initialize configuration directory and file
+init_config() {
+    if [ ! -d "$CONFIG_DIR" ]; then
+        mkdir -p "$CONFIG_DIR"
+    fi
+    
+    if [ ! -f "$CONFIG_FILE" ]; then
+        cat > "$CONFIG_FILE" << 'EOF'
+{
+  "recent_domains": [],
+  "ssh_favorites": [],
+  "export_stats": {
+    "total_exports": 0,
+    "last_export": null
+  }
+}
+EOF
+    fi
+}
+
+# Load configuration
+load_config() {
+    init_config
+    if [ -f "$CONFIG_FILE" ]; then
+        cat "$CONFIG_FILE"
+    else
+        echo '{"recent_domains":[],"ssh_favorites":[],"export_stats":{"total_exports":0,"last_export":null}}'
+    fi
+}
+
+# Save configuration
+save_config() {
+    local config_data="$1"
+    echo "$config_data" > "$CONFIG_FILE"
+}
+
+# Add domain to recent history (with deduplication and limit)
+add_domain_to_history() {
+    local domain="$1"
+    local config=$(load_config)
+    
+    # Add new domain to the beginning, remove duplicates, and limit to MAX_RECENT_DOMAINS
+    local updated_config=$(echo "$config" | python3 -c "
+import json, sys
+from datetime import datetime, timezone
+config = json.load(sys.stdin)
+domain = '$domain'
+domains = config.get('recent_domains', [])
+domain_stats = config.get('domain_stats', {})
+# Remove existing occurrence if present
+if domain in domains:
+    domains.remove(domain)
+# Add to beginning
+domains.insert(0, domain)
+# Limit to max
+config['recent_domains'] = domains[:$MAX_RECENT_DOMAINS]
+# Update domain stats
+if 'domain_stats' not in config:
+    config['domain_stats'] = {}
+if domain not in config['domain_stats']:
+    config['domain_stats'][domain] = {}
+config['domain_stats'][domain]['last_export'] = datetime.now(timezone.utc).isoformat()
+config['domain_stats'][domain]['export_count'] = config['domain_stats'][domain].get('export_count', 0) + 1
+print(json.dumps(config, indent=2))
+")
+    
+    save_config "$updated_config"
+}
+
+# Add SSH connection to favorites
+add_ssh_to_favorites() {
+    local ssh_connection="$1"
+    local wp_path="$2"
+    local config=$(load_config)
+    
+    local updated_config=$(echo "$config" | python3 -c "
+import json, sys
+config = json.load(sys.stdin)
+connection = '$ssh_connection'
+path = '$wp_path'
+favorites = config.get('ssh_favorites', [])
+# Create entry
+entry = {'connection': connection, 'path': path}
+# Remove existing if present
+favorites = [f for f in favorites if f.get('connection') != connection]
+# Add to beginning
+favorites.insert(0, entry)
+# Limit to max
+config['ssh_favorites'] = favorites[:$MAX_SSH_FAVORITES]
+print(json.dumps(config, indent=2))
+")
+    
+    save_config "$updated_config"
+}
+
+# Get recent domains as array with timestamps
+get_recent_domains() {
+    local config=$(load_config)
+    echo "$config" | python3 -c "
+import json, sys
+from datetime import datetime, timezone
+config = json.load(sys.stdin)
+domains = config.get('recent_domains', [])
+domain_stats = config.get('domain_stats', {})
+for domain in domains:
+    stats = domain_stats.get(domain, {})
+    last_export = stats.get('last_export', '')
+    if last_export:
+        try:
+            # Parse the timestamp and calculate days ago
+            export_date = datetime.fromisoformat(last_export.replace('Z', '+00:00'))
+            now = datetime.now(timezone.utc)
+            days_ago = (now - export_date).days
+            if days_ago == 0:
+                time_str = 'today'
+            elif days_ago == 1:
+                time_str = 'yesterday'
+            else:
+                time_str = f'{days_ago} days ago'
+            print(f'{domain}|{time_str}')
+        except:
+            print(f'{domain}|never')
+    else:
+        print(f'{domain}|never')
+"
+}
+
+# Get SSH favorites
+get_ssh_favorites() {
+    local config=$(load_config)
+    echo "$config" | python3 -c "
+import json, sys
+config = json.load(sys.stdin)
+favorites = config.get('ssh_favorites', [])
+for i, fav in enumerate(favorites):
+    print(f'{i+1}|{fav.get(\"connection\", \"\")}|{fav.get(\"path\", \"\")}')
+"
+}
+
+# Update export statistics
+update_export_stats() {
+    local domain="$1"
+    local config=$(load_config)
+    local timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+    
+    local updated_config=$(echo "$config" | python3 -c "
+import json, sys
+config = json.load(sys.stdin)
+stats = config.get('export_stats', {})
+stats['total_exports'] = stats.get('total_exports', 0) + 1
+stats['last_export'] = '$timestamp'
+stats['last_domain'] = '$domain'
+config['export_stats'] = stats
+print(json.dumps(config, indent=2))
+")
+    
+    save_config "$updated_config"
+}
+
+#########################################
+# Mode Selection
+#########################################
+
+echo -e "${GREEN}=== WordPress Export Script v4.0 ===${NC}"
+echo ""
+echo "Select export mode:"
+echo "  1) Local WordPress"
+echo "  2) Remote WordPress (SSH)"
+echo ""
+read -rp "Enter choice (1 or 2): " MODE_CHOICE
+
 REMOTE_MODE=0
-if [[ "${1:-}" == "--remote" ]] || [[ "${1:-}" == "-r" ]]; then
+if [[ "$MODE_CHOICE" == "2" ]]; then
     REMOTE_MODE=1
 fi
 
@@ -63,15 +247,14 @@ fi
 #########################################
 
 if [ "$REMOTE_MODE" -eq 0 ]; then
-    echo -e "${GREEN}=== WordPress Export Script (Local Mode) ===${NC}"
+    echo -e "\n${GREEN}Local Mode Selected${NC}"
     
     # Check for WP-CLI locally
     if ! command -v wp &> /dev/null; then
         echo "❌ Error: WP-CLI (wp) is not installed or not in PATH."
         echo "Please install WP-CLI before running this script."
         echo ""
-        echo "To run this script on a remote server instead, use:"
-        echo "  ./export_wp_posts_unified.sh --remote"
+        echo "Install instructions: https://wp-cli.org/#installing"
         exit 1
     fi
     
@@ -81,7 +264,7 @@ if [ "$REMOTE_MODE" -eq 0 ]; then
     WP_PATH="."
     
 else
-    echo -e "${GREEN}=== WordPress Export Script (Remote Mode) ===${NC}"
+    echo -e "\n${GREEN}Remote Mode Selected${NC}"
     echo "This script exports all post types and custom permalinks via SSH."
     
     # Function to parse SSH config
@@ -103,59 +286,97 @@ else
         printf '%s\n' "${hosts[@]}"
     }
     
+    # Get SSH favorites from config
+    SSH_FAVORITES=()
+    while IFS='|' read -r idx connection path; do
+        if [ -n "$connection" ]; then
+            SSH_FAVORITES+=("$idx|$connection|$path")
+        fi
+    done < <(get_ssh_favorites)
+    
     # Check for SSH config hosts
     SSH_HOSTS=($(parse_ssh_config))
     
+    echo -e "\n${YELLOW}SSH Connection Options:${NC}"
+    
+    # Show favorites if any
+    if [ ${#SSH_FAVORITES[@]} -gt 0 ]; then
+        echo -e "\n${GREEN}Recent SSH connections:${NC}"
+        for fav in "${SSH_FAVORITES[@]}"; do
+            IFS='|' read -r idx connection path <<< "$fav"
+            echo "  F$idx. $connection (path: $path)"
+        done
+    fi
+    
+    # Show SSH config hosts
     if [ ${#SSH_HOSTS[@]} -gt 0 ]; then
-        echo -e "\n${YELLOW}Available SSH hosts:${NC}"
+        echo -e "\n${YELLOW}SSH config hosts:${NC}"
         for i in "${!SSH_HOSTS[@]}"; do
             echo "  $((i+1)). ${SSH_HOSTS[$i]}"
         done
-        echo "  0. Enter custom connection"
-        
-        read -rp $'\nSelect a host (1-'${#SSH_HOSTS[@]}') or 0 for custom: ' HOST_CHOICE
-        
-        if [[ "$HOST_CHOICE" =~ ^[1-9][0-9]*$ ]] && [ "$HOST_CHOICE" -le "${#SSH_HOSTS[@]}" ]; then
-            SSH_CONNECTION="${SSH_HOSTS[$((HOST_CHOICE-1))]}"
-            echo -e "${GREEN}Using: $SSH_CONNECTION${NC}"
-            
-            # Auto-detect common paths based on hostname patterns
-            if [[ "$SSH_CONNECTION" =~ press ]] || [[ "$SSH_CONNECTION" =~ pressable ]]; then
-                SUGGESTED_PATH="/htdocs"
-            elif [[ "$SSH_CONNECTION" =~ wpe ]] || [[ "$SSH_CONNECTION" =~ wpengine ]]; then
-                SITE_NAME="${SSH_CONNECTION#wpe-}"
-                SITE_NAME="${SITE_NAME%%.*}"
-                SUGGESTED_PATH="/home/wpe-user/sites/$SITE_NAME"
-            elif [[ "$SSH_CONNECTION" =~ kinsta ]]; then
-                SUGGESTED_PATH="/www/[sitename]_[id]/public"
-            elif [[ "$SSH_CONNECTION" =~ siteground ]]; then
-                SUGGESTED_PATH="~/public_html"
-            else
-                SUGGESTED_PATH="~/public_html"
-            fi
-        else
-            read -rp "Enter SSH user@host: " SSH_CONNECTION
-            SUGGESTED_PATH=""
-        fi
-    else
-        read -rp "Enter SSH user@host: " SSH_CONNECTION
-        SUGGESTED_PATH=""
     fi
     
-    # Get WordPress path
-    if [ -n "$SUGGESTED_PATH" ]; then
-        # Show detected host type for clarity
-        if [[ "$SSH_CONNECTION" =~ press ]]; then
-            echo -e "${YELLOW}Detected: Pressable host${NC}"
-        elif [[ "$SSH_CONNECTION" =~ wpe ]]; then
-            echo -e "${YELLOW}Detected: WP Engine host${NC}"
+    echo "  0. Enter custom connection"
+    
+    # Get selection
+    if [ ${#SSH_FAVORITES[@]} -gt 0 ]; then
+        read -rp $'\nSelect an option (F1-F'${#SSH_FAVORITES[@]}', 1-'${#SSH_HOSTS[@]}', or 0): ' HOST_CHOICE
+    else
+        read -rp $'\nSelect a host (1-'${#SSH_HOSTS[@]}') or 0 for custom: ' HOST_CHOICE
+    fi
+    
+    # Process selection
+    if [[ "$HOST_CHOICE" =~ ^F([0-9]+)$ ]]; then
+        # Favorite selected
+        FAV_NUM="${BASH_REMATCH[1]}"
+        for fav in "${SSH_FAVORITES[@]}"; do
+            IFS='|' read -r idx connection path <<< "$fav"
+            if [[ "$idx" == "$FAV_NUM" ]]; then
+                SSH_CONNECTION="$connection"
+                WP_PATH="$path"
+                echo -e "${GREEN}Using favorite: $SSH_CONNECTION (path: $WP_PATH)${NC}"
+                break
+            fi
+        done
+    elif [[ "$HOST_CHOICE" =~ ^[1-9][0-9]*$ ]] && [ "$HOST_CHOICE" -le "${#SSH_HOSTS[@]}" ]; then
+        # SSH config host selected
+        SSH_CONNECTION="${SSH_HOSTS[$((HOST_CHOICE-1))]}"
+        echo -e "${GREEN}Using: $SSH_CONNECTION${NC}"
+        
+        # Auto-detect common paths based on hostname patterns
+        if [[ "$SSH_CONNECTION" =~ press ]] || [[ "$SSH_CONNECTION" =~ pressable ]]; then
+            SUGGESTED_PATH="/htdocs"
+        elif [[ "$SSH_CONNECTION" =~ wpe ]] || [[ "$SSH_CONNECTION" =~ wpengine ]]; then
+            SITE_NAME="${SSH_CONNECTION#wpe-}"
+            SITE_NAME="${SITE_NAME%%.*}"
+            SUGGESTED_PATH="/home/wpe-user/sites/$SITE_NAME"
         elif [[ "$SSH_CONNECTION" =~ kinsta ]]; then
-            echo -e "${YELLOW}Detected: Kinsta host${NC}"
+            SUGGESTED_PATH="/www/[sitename]_[id]/public"
+        elif [[ "$SSH_CONNECTION" =~ siteground ]]; then
+            SUGGESTED_PATH="~/public_html"
+        else
+            SUGGESTED_PATH="~/public_html"
         fi
         
-        read -rp "Enter WordPress path (suggested: $SUGGESTED_PATH): " WP_PATH
-        WP_PATH=${WP_PATH:-$SUGGESTED_PATH}
+        # Get WordPress path
+        if [ -n "$SUGGESTED_PATH" ]; then
+            # Show detected host type for clarity
+            if [[ "$SSH_CONNECTION" =~ press ]]; then
+                echo -e "${YELLOW}Detected: Pressable host${NC}"
+            elif [[ "$SSH_CONNECTION" =~ wpe ]]; then
+                echo -e "${YELLOW}Detected: WP Engine host${NC}"
+            elif [[ "$SSH_CONNECTION" =~ kinsta ]]; then
+                echo -e "${YELLOW}Detected: Kinsta host${NC}"
+            fi
+            
+            read -rp "Enter WordPress path (suggested: $SUGGESTED_PATH): " WP_PATH
+            WP_PATH=${WP_PATH:-$SUGGESTED_PATH}
+        else
+            read -rp "Enter WordPress path (e.g., ~/htdocs): " WP_PATH
+        fi
     else
+        # Custom connection
+        read -rp "Enter SSH user@host: " SSH_CONNECTION
         read -rp "Enter WordPress path (e.g., ~/htdocs): " WP_PATH
     fi
     
@@ -164,11 +385,40 @@ else
 fi
 
 #########################################
-# Common Setup for Both Modes
+# Domain Input with History
 #########################################
 
 echo ""
-read -rp "Enter base domain: " BASE_DOMAIN
+
+# Get recent domains
+RECENT_DOMAINS=()
+RECENT_DOMAINS_INFO=()
+while IFS='|' read -r domain last_export; do
+    if [ -n "$domain" ]; then
+        RECENT_DOMAINS+=("$domain")
+        RECENT_DOMAINS_INFO+=("$domain|$last_export")
+    fi
+done < <(get_recent_domains)
+
+if [ ${#RECENT_DOMAINS[@]} -gt 0 ]; then
+    echo -e "${YELLOW}Recent domains:${NC}"
+    for i in "${!RECENT_DOMAINS_INFO[@]}"; do
+        IFS='|' read -r domain last_export <<< "${RECENT_DOMAINS_INFO[$i]}"
+        echo "  $((i+1)). $domain (last export: $last_export)"
+    done
+    echo ""
+    read -rp "Select a recent domain (1-${#RECENT_DOMAINS[@]}) or enter new domain: " DOMAIN_CHOICE
+    
+    if [[ "$DOMAIN_CHOICE" =~ ^[1-9][0-9]*$ ]] && [ "$DOMAIN_CHOICE" -le "${#RECENT_DOMAINS[@]}" ]; then
+        BASE_DOMAIN="${RECENT_DOMAINS[$((DOMAIN_CHOICE-1))]}"
+        echo -e "${GREEN}Using: $BASE_DOMAIN${NC}"
+    else
+        BASE_DOMAIN="$DOMAIN_CHOICE"
+    fi
+else
+    read -rp "Enter base domain: " BASE_DOMAIN
+fi
+
 BASE_DOMAIN=${BASE_DOMAIN:-example.com}
 
 read -rp "Include user export? (y/n, default: y): " EXPORT_USERS
@@ -648,6 +898,21 @@ else
     echo ""
     echo "The CSV file contains all data and can be opened in Excel/Google Sheets."
 fi
+
+#########################################
+# Update Configuration
+#########################################
+
+# Add domain to history
+add_domain_to_history "$BASE_DOMAIN"
+
+# If remote mode, save SSH connection
+if [ "$REMOTE_MODE" -eq 1 ]; then
+    add_ssh_to_favorites "$SSH_CONNECTION" "$WP_PATH"
+fi
+
+# Update export statistics
+update_export_stats "$BASE_DOMAIN"
 
 #########################################
 # Final Cleanup and Summary 

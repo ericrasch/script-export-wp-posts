@@ -221,6 +221,7 @@ GitHub: https://github.com/ericrasch/script-export-wp-posts
 - Parallel processing for large exports
 - Compression of export files
 - Option to exclude post content for faster exports
+- Option to exclude specific post-types
 
 ### 10. Integration Features
 - Webhook notifications on completion
