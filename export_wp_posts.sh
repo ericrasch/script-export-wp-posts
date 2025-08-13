@@ -381,7 +381,7 @@ else
     fi
     
     # Set up remote WP command
-    WP_CMD="ssh -T -o ServerAliveInterval=5 -o ServerAliveCountMax=3 $SSH_CONNECTION cd $WP_PATH && wp"
+    WP_CMD="ssh -T -o ServerAliveInterval=5 -o ServerAliveCountMax=3 \"$SSH_CONNECTION\" \"cd '$WP_PATH' && wp\""
 fi
 
 #########################################
