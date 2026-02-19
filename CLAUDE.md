@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a Bash shell script project that exports WordPress data using WP-CLI. The main script `export_wp_posts.sh` can run either locally or remotely via SSH, generating CSV and Excel files containing posts, custom permalinks, and optionally user data for SEO audits and data analysis.
+This is a Bash shell script project that exports WordPress data using WP-CLI. The main script `export_wp_posts.sh` (v5.0) can run either locally or remotely via SSH, generating CSV and Excel files containing posts, custom permalinks, custom meta fields, and optionally user data for SEO audits and data analysis.
 
 **Important Note**: The script was previously named `export_wp_posts_unified_v2.sh` but has been renamed to `export_wp_posts.sh` as the primary script. The original local-only script is preserved as `export_wp_posts_legacy.sh`.
 
@@ -26,8 +26,16 @@ chmod +x export_wp_posts.sh
 # or
 ./export_wp_posts.sh -r
 
-# Run with user export disabled (answer 'n' when prompted)
-./export_wp_posts.sh
+# Verbose mode (show SSH debug output)
+./export_wp_posts.sh --verbose
+# or
+./export_wp_posts.sh -v
+
+# Debug mode (verbose + debug log file)
+./export_wp_posts.sh --debug
+
+# Combine flags
+./export_wp_posts.sh -r -v
 ```
 
 ### Development and Testing
@@ -35,14 +43,14 @@ chmod +x export_wp_posts.sh
 # Check script syntax
 bash -n export_wp_posts.sh
 
-# Run with debug output
+# Run with bash debug output
 bash -x export_wp_posts.sh
 
 # Test locally in a WordPress directory
 cd /path/to/wordpress && /path/to/script/export_wp_posts.sh
 
-# Test remote export
-./export_wp_posts.sh --remote
+# Test remote export with verbose SSH output
+./export_wp_posts.sh --remote --verbose
 ```
 
 ### Setup Excel Support
@@ -55,25 +63,46 @@ cd /path/to/wordpress && /path/to/script/export_wp_posts.sh
 
 ### Script Structure
 The `export_wp_posts.sh` script follows this execution flow:
-1. **Environment Validation**: Checks for WP-CLI installation and WordPress directory
-2. **Post Type Discovery**: Dynamically identifies all public post types (excluding attachments)
-3. **Data Export**: Uses WP-CLI to export posts with ID, title, URL, and custom permalinks
-4. **Data Processing**: Merges posts data with custom permalinks using AWK
-5. **Excel Generation**: Converts CSV to Excel with Python, adding formulas for URL concatenation
-6. **User Export**: Optionally exports user statistics with post counts
+1. **CLI Argument Parsing**: Handles `--remote`/`-r`, `--verbose`/`-v`, `--debug` flags
+2. **Environment Setup**: Configures SSH options, stderr routing, sudo prefix
+3. **SSH Connection Setup** (remote mode):
+   a. Lists SSH favorites and config hosts
+   b. Path recall from favorites or hostname pattern detection
+   c. RemoteCommand/RequestTTY detection and override via `ssh -G`
+   d. Sudo user extraction from RemoteCommand pattern
+   e. Pre-flight validation (connectivity, path, WP-CLI)
+4. **Post Type Discovery**: Dynamically identifies all public post types (excluding attachments), with 3 fallback methods
+5. **Custom Meta Field Prompt**: Interactive prompt for additional meta keys to export
+6. **Data Export**: Uses WP-CLI to export posts, custom permalinks, and any custom meta fields
+7. **Data Processing**: Merges all data using Perl with proper CSV parsing (handles quoted fields, commas in titles)
+8. **Excel Generation**: Converts CSV to Excel with Python, dynamic column count, clickable URLs and admin links
+9. **User Export**: Optionally exports user statistics with post counts
+10. **Configuration Update**: Saves domain history, SSH favorites, and export statistics
+
+### Key Functions
+
+- **`build_remote_cmd()`**: Wraps commands with `sudo -iu <user>` when RemoteCommand is detected in SSH config. Called at every SSH command site to transparently handle multi-user setups (e.g., SSH as `ubuntu`, WP files owned by `blog`).
+- **`load_config()` / `save_config()`**: JSON configuration persistence using Python for parsing/writing.
+- **`add_domain_to_history()`**: Adds/promotes domains in the recent history list.
+- **`add_ssh_to_favorites()`**: Saves SSH connection + WordPress path pairs for path recall.
+- **`update_export_stats()`**: Tracks export counts and dates per domain.
 
 ### Key Technical Decisions
-- Uses AWK for efficient in-memory data processing instead of temporary files
-- Implements proper error handling with exit codes
+- Uses `set -euo pipefail` with `|| true` guards on grep pipelines to prevent silent exits
+- Uses Perl for CSV merging — robust parser handles quoted fields, commas in titles, and N meta field files
+- SSH options (`SSH_OPTS`) are centralized and consistent across all SSH calls
+- SSH stderr routes to `/dev/stderr` in verbose mode, `/dev/null` otherwise
+- RemoteCommand detection uses `ssh -G <host>` to resolve effective SSH config
+- Empty bash arrays use `${array[@]+"${array[@]}"}` pattern for `set -u` compatibility
 - Creates outputs in timestamped directories with domain names (e.g., `!export_wp_posts_20250811_143244_example-com/`)
-- Supports both local and remote (SSH) exports with automatic host detection
-- Handles titles with commas by reassembling split fields intelligently
+- Dynamic `EXPECTED_COLUMNS` computed as 7 base + number of custom meta fields
 - Uses HYPERLINK formula in Excel for clickable URLs while maintaining clean CSV format
 - Dynamically discovers post types rather than hardcoding them
 
 ### Dependencies and Requirements
-- **WP-CLI**: Must be installed and accessible in PATH
+- **WP-CLI**: Must be installed and accessible in PATH (local) or on remote server
 - **Python 3.x**: Required with openpyxl library (install with `./enable_excel.sh`)
+- **Perl**: Used for CSV data merging (typically pre-installed on macOS/Linux)
 - **Environment**: For local mode, must run from WordPress root directory
 - **SSH Access**: For remote mode, requires SSH access with WP-CLI on remote server
 - **Shell**: Bash-compatible shell environment
@@ -81,12 +110,17 @@ The `export_wp_posts.sh` script follows this execution flow:
 ## Important Patterns
 
 ### Error Handling
-The script uses consistent error handling:
+The script uses `set -euo pipefail` with careful `|| true` guards:
 ```bash
-if ! command_exists wp; then
-    echo "Error: WP-CLI is not installed" >&2
-    exit 1
-fi
+# Grep pipelines that might return empty results use || true to prevent pipefail exit
+POST_TYPES_RAW=$(echo "$POST_TYPES_RAW" | tr -d '\r' | grep -v "^$" | grep -v "^Connection to" || true)
+```
+
+### SSH Command Wrapping
+All remote commands go through `build_remote_cmd()`:
+```bash
+REMOTE_CMD=$(build_remote_cmd "cd \"$WP_PATH\" && wp post-type list --public --format=names")
+RESULT=$(ssh $SSH_OPTS "$SSH_CONNECTION" "$REMOTE_CMD" 2>>"$SSH_STDERR")
 ```
 
 ### Data Processing with Perl
@@ -98,10 +132,10 @@ sub parse_csv_line {
     my @fields = ();
     my $field = "";
     my $in_quotes = 0;
-    
+
     for (my $i = 0; $i < length($line); $i++) {
         my $char = substr($line, $i, 1);
-        
+
         if ($char eq "\"") {
             if ($in_quotes && $i + 1 < length($line) && substr($line, $i + 1, 1) eq "\"") {
                 $field .= "\"";
@@ -117,7 +151,7 @@ sub parse_csv_line {
         }
     }
     push @fields, $field;
-    
+
     return @fields;
 }
 ```
@@ -127,10 +161,17 @@ This parser correctly handles:
 - Escaped quotes within quoted fields
 - Mixed quoted and unquoted fields
 
+The Perl merge script accepts N additional meta field files via `ARGV[2+]`, loading each into `%meta_data{field_name}{post_id}`. Output column order: `ID, post_title, post_name, custom_permalink, [meta fields...], post_date, post_status, post_type`.
+
 ### Excel Generation
-Python is used for Excel conversion with formula support:
-```python
-df.to_excel(writer, sheet_name='Posts', index=False)
+Python heredoc builds headers dynamically based on `custom_meta_keys` list. Column positions for date, status, type, and edit link adjust automatically based on meta field count.
+
+### Empty Array Safety
+Under `set -u`, empty bash arrays cause "unbound variable" errors. The pattern used throughout:
+```bash
+for item in ${CUSTOM_META_KEYS[@]+"${CUSTOM_META_KEYS[@]}"}; do
+    # safe even when CUSTOM_META_KEYS is empty
+done
 ```
 
 ## Customization Points
@@ -142,4 +183,7 @@ When modifying the script:
 4. **User Export**: Toggle with `EXPORT_USERS` environment variable
 5. **Directory Names**: Export directories include timestamp and domain name
 6. **SSH Hosts**: The script auto-detects SSH hosts from `~/.ssh/config`
-7. **Remote Paths**: Automatically suggests paths for known hosts (Pressable, WP Engine, Kinsta)
+7. **Remote Paths**: Automatically suggests paths for known hosts (Pressable, WP Engine, Kinsta, AWS/EC2, Bitnami, Lightsail, Cloudways, Flywheel)
+8. **Path Recall**: Previously used paths are recalled from SSH favorites
+9. **Meta Fields**: Users can add any number of custom meta keys at export time
+10. **SSH Options**: Centralized in `SSH_OPTS` variable for easy modification

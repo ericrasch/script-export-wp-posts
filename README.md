@@ -1,13 +1,16 @@
 # WordPress Export Script
 
-A powerful shell script that exports WordPress posts, custom permalinks, and users from WordPress sites - either locally or remotely via SSH. Generates both CSV and Excel files for SEO audits and data analysis.
+A powerful shell script that exports WordPress posts, custom permalinks, custom meta fields, and users from WordPress sites - either locally or remotely via SSH. Generates both CSV and Excel files for SEO audits and data analysis.
 
 ## Key Features
 - ✅ **Proper CSV Handling**: Correctly handles posts with commas, quotes, and special characters in titles
 - 🔄 **Unified Operation**: Single script for both local and remote exports
 - 📊 **Excel Generation**: Automatic conversion with clickable URLs and admin links
 - 🔍 **Dynamic Discovery**: Automatically finds all public post types
-- 🌐 **Multi-Host Support**: Works with Pressable, WP Engine, Kinsta, and more
+- 🌐 **Multi-Host Support**: Works with Pressable, WP Engine, Kinsta, AWS, and more
+- 🔧 **SSH Debugging**: Built-in verbose mode, pre-flight validation, and RemoteCommand detection
+- 📋 **Custom Meta Fields**: Export any WordPress meta key as additional spreadsheet columns
+- 💾 **Configuration Memory**: Remembers recent domains, SSH connections, and paths
 
 ![CleanShot 2025-04-16 at 11 52 09](https://github.com/user-attachments/assets/0289ce1c-5d1e-4fd7-92ee-23c87546e33d)
 
@@ -15,38 +18,60 @@ A powerful shell script that exports WordPress posts, custom permalinks, and use
 
 - **Unified Script**: Single script handles both local and remote (SSH) exports
 - **Post Export**: Exports all public post types (posts, pages, custom post types)
-- **Custom Permalinks**: Captures custom permalink structures if set
+- **Custom Permalinks**: Captures custom permalink structures if set (always included)
+- **Custom Meta Fields**: Export additional meta keys (e.g., `_yoast_wpseo_title`) as extra columns
 - **User Export**: Optional export of users with their post counts
 - **Excel Generation**: Automatically converts CSV to Excel with formulas for clickable URLs
 - **SEO-Ready**: Includes all necessary data for SEO audits and migration planning
 - **Smart SSH**: Auto-detects SSH hosts from config and suggests appropriate paths
+- **Path Recall**: Remembers previously used paths for each SSH host
+- **SSH Pre-Flight Validation**: Tests connectivity, path existence, and WP-CLI availability before exporting
+- **RemoteCommand Detection**: Automatically handles SSH configs with `RemoteCommand` and `RequestTTY` directives
+- **Sudo Wrapping**: Detects `sudo -iu <user>` patterns in SSH config and wraps commands accordingly
 - **Domain-Named Folders**: Export folders include the domain name for easy identification
-- **Host Detection**: Recognizes common hosts (Pressable, WP Engine, Kinsta) and adapts accordingly
+- **Host Detection**: Recognizes common hosts and adapts accordingly
+- **Verbose/Debug Modes**: CLI flags for troubleshooting SSH and export issues
 
 ## Usage
 
-### Local Export (when you're in the WordPress directory)
+### Command-Line Flags
+
 ```bash
+# Local export (run from WordPress root directory)
 ./export_wp_posts.sh
+
+# Remote export (via SSH)
+./export_wp_posts.sh --remote
+./export_wp_posts.sh -r
+
+# Verbose mode (show SSH debug output)
+./export_wp_posts.sh --verbose
+./export_wp_posts.sh -v
+
+# Debug mode (verbose + debug log file)
+./export_wp_posts.sh --debug
+
+# Combine flags
+./export_wp_posts.sh --remote --verbose
+./export_wp_posts.sh -r -v
 ```
 
-### Remote Export (via SSH)
-```bash
-./export_wp_posts.sh --remote
-# or
-./export_wp_posts.sh -r
-```
-./export_wp_posts.sh
 ### Setup Excel Support
 ```bash
 ./enable_excel.sh
 ```
 
+### How It Works
+
 The script will:
 1. Auto-detect available SSH hosts from your `~/.ssh/config` (remote mode)
-2. Suggest appropriate WordPress paths based on the host type
-3. Prompt for domain name and user export preference
-4. Generate all files locally in a timestamped, domain-named folder
+2. Show SSH favorites with saved paths from previous exports
+3. Suggest appropriate WordPress paths based on the host type or saved history
+4. Run pre-flight SSH validation (connectivity, path, WP-CLI)
+5. Discover all public post types dynamically
+6. Prompt for optional custom meta field exports
+7. Prompt for domain name and user export preference
+8. Generate all files locally in a timestamped, domain-named folder
 
 ## Output
 
@@ -56,11 +81,12 @@ All files are created in a timestamped folder that includes the domain name:
 !export_wp_posts_20250811_143244_example-com/
 ├── export_all_posts.csv              # Raw post export
 ├── export_custom_permalinks.csv      # Custom permalink data
+├── export_meta_[key].csv            # Custom meta field data (one per key)
 ├── export_wp_posts_[timestamp].csv   # Final merged CSV
 ├── export_wp_posts_[timestamp].xlsx  # Excel file with formulas
 ├── export_users.csv                  # Raw user export (if enabled)
 ├── export_users_with_post_counts.csv # Users with post counts (if enabled)
-└── export_debug_log.txt             # Debug information (if DEBUG=1)
+└── export_debug_log.txt             # Debug information (if --debug)
 ```
 
 ### Excel File Structure
@@ -69,7 +95,10 @@ The generated Excel file includes:
 - **Row 1**: Editable base domain (change this to update all URLs)
 - **Row 2**: Column headers
 - **Column A**: Formula-generated full URLs (uses custom permalink if exists, otherwise post_name)
-- **Column I**: Clickable WP Admin edit links
+- **Custom Meta Columns**: Inserted between custom_permalink and post_date (if any meta fields were exported)
+- **Last Column**: Clickable WP Admin edit links
+
+The number of columns adjusts dynamically based on how many custom meta fields are exported. The base is 7 columns (ID, title, name, custom_permalink, date, status, type) plus one column per meta field, plus the URL formula and edit link columns.
 
 ## Requirements
 
@@ -99,19 +128,52 @@ The script recognizes and adapts to:
 - **Pressable**: Auto-suggests `/htdocs` path
 - **WP Engine**: Auto-detects site path from hostname
 - **Kinsta**: Suggests standard Kinsta paths
+- **AWS/EC2**: Suggests `/var/www/html`
+- **AWS Lightsail / Bitnami**: Suggests `/opt/bitnami/wordpress`
+- **Cloudways**: Suggests `~/public_html`
+- **Flywheel**: Suggests `~/public_html`
 - **SiteGround**: Suggests `~/public_html`
 - **Generic hosts**: Default to `~/public_html`
 
+If a host has been used before via SSH favorites, the previously used path is suggested instead.
+
+## Configuration
+
+The script stores configuration in `.config/wp-export-config.json` (gitignored) in the script directory:
+
+- **Recent Domains**: Up to 10 recently exported domains, shown as selectable options
+- **SSH Favorites**: Recently used SSH connections with their WordPress paths, shown at the top of the host list
+- **Export Statistics**: Tracks export count, last export date, and post counts per domain
+- **Path Recall**: When selecting an SSH host by number, if that host was previously used as a favorite, its saved path is suggested automatically
+
 ## Exported Data
 
-### Posts Export (7 columns)
+### Posts Export (7+ columns)
 1. **ID**: Post ID
 2. **post_title**: Title (sanitized, commas removed)
 3. **post_name**: URL slug
 4. **custom_permalink**: Custom permalink if set
-5. **post_date**: Publication date
-6. **post_status**: Status (publish, draft, etc.)
-7. **post_type**: Type (post, page, custom types)
+5. *[Custom meta fields]*: Any additional meta keys requested during export
+6. **post_date**: Publication date
+7. **post_status**: Status (publish, draft, etc.)
+8. **post_type**: Type (post, page, custom types)
+
+### Custom Meta Fields
+
+When prompted, you can export any WordPress meta key as an additional column. Enter meta key names one at a time (press Enter on an empty line when done):
+
+```
+Export additional meta fields? (y/n, default: n): y
+Enter meta key names one per line (press Enter twice when done):
+Example: _custom_clean_url, _yoast_wpseo_title
+> _yoast_wpseo_title
+  Added: _yoast_wpseo_title
+> _custom_clean_url
+  Added: _custom_clean_url
+>
+```
+
+Each meta field is exported to its own intermediate CSV, then merged into the final output. The `custom_permalink` column is always present regardless of custom meta field choices.
 
 ### Users Export (8 columns if enabled)
 1. **ID**: User ID
@@ -125,21 +187,45 @@ The script recognizes and adapts to:
 
 ## Troubleshooting
 
+### SSH Pre-Flight Validation
+
+The script runs three validation tests before attempting an export:
+1. **SSH Connectivity**: Can we connect to the host?
+2. **WordPress Path**: Does the specified directory exist?
+3. **WP-CLI**: Is WP-CLI installed and accessible?
+
+Each test provides specific troubleshooting guidance on failure.
+
+### RemoteCommand / sudo Detection
+
+Some SSH configs (e.g., AWS setups) include `RemoteCommand` or `RequestTTY` directives that prevent scripted command execution. The script:
+1. Detects `RemoteCommand` via `ssh -G <host>`
+2. Overrides it with `-o RemoteCommand=none -o RequestTTY=no`
+3. If the RemoteCommand uses `sudo -iu <user>`, wraps all WP-CLI commands with the same sudo prefix
+
+This is fully automatic — no manual configuration needed.
+
+### Verbose and Debug Modes
+
+```bash
+# Show SSH stderr output for connection debugging
+./export_wp_posts.sh --verbose
+
+# Full debug mode (verbose + debug log file in export directory)
+./export_wp_posts.sh --debug
+```
+
 ### SSH Connection Issues
-- For Pressable hosts, the script automatically uses `-T` flag to disable pseudo-terminal
+- The script uses `-T` flag to disable pseudo-terminal allocation
 - Connection keepalive is enabled with 5-second intervals
-- Large exports may cause connections to close - this is normal and handled gracefully
+- SSH timeout set to 30 seconds
+- If you see "Cannot execute command-line and remote command", the RemoteCommand detection should handle this automatically
+- For manual debugging: `ssh -v <host> 'echo test'`
 
 ### Excel Generation
 - If Excel generation fails, ensure Python and openpyxl are installed
 - Run `./enable_excel.sh` to set up Excel support
 - CSV files can always be imported into Excel/Google Sheets manually
-
-### Debug Mode
-To enable detailed logging, edit the script and set:
-```bash
-DEBUG=1
-```
 
 ## Examples
 
@@ -160,6 +246,19 @@ cd /var/www/mysite
 # Include users? n
 ```
 
+### Remote AWS Export with Meta Fields
+```bash
+./export_wp_posts.sh -r -v
+# Select host: my-aws-host
+# Path: /var/www/blog/public_html/blog/
+# Domain: example.com
+# Export additional meta fields? y
+# > _yoast_wpseo_title
+# > _custom_clean_url
+# >
+# Include users? y
+```
+
 ### Legacy Script
 The original local-only script is preserved as `export_wp_posts_legacy.sh` for reference.
 
@@ -173,17 +272,17 @@ MIT License - see LICENSE file for details
 
 ## Author
 
-Eric Rasch  
+Eric Rasch
 GitHub: https://github.com/ericrasch/script-export-wp-posts
 
 ## Future Enhancements (TODO)
 
-### 1. Configuration File Support
-- Save settings the first time a user runs the script
-- Incrementally add domains to the configuration file as they're used
-- Present previously used domains as options when script is rerun
-- Save SSH favorites from recently used connections
-- Include last exported date for each domain
+### ~~1. Configuration File Support~~ ✅ Implemented in v5.0
+- ~~Save settings the first time a user runs the script~~
+- ~~Incrementally add domains to the configuration file as they're used~~
+- ~~Present previously used domains as options when script is rerun~~
+- ~~Save SSH favorites from recently used connections~~
+- ~~Include last exported date for each domain~~
 
 ### 2. Export Profiles/Templates
 - Add ability to save and reuse export configurations (e.g., `--profile seo-audit`)
@@ -213,9 +312,9 @@ GitHub: https://github.com/ericrasch/script-export-wp-posts
 - Export from multiple sites in one run
 - Support for batch configuration files
 
-### 8. Custom Field Support
-- Export specific custom fields/meta data
-- Option like `--meta-keys "seo_title,seo_description"`
+### ~~8. Custom Field Support~~ ✅ Implemented in v5.0
+- ~~Export specific custom fields/meta data~~
+- ~~Option like `--meta-keys "seo_title,seo_description"`~~
 
 ### 9. Performance Enhancements
 - Parallel processing for large exports

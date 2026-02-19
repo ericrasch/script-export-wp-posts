@@ -34,20 +34,14 @@ echo "Installing openpyxl for current user..."
 echo "(This will not affect your system Python installation)"
 echo ""
 
-if $PYTHON_CMD -m pip install --user --break-system-packages openpyxl 2>/dev/null || \
-# Install openpyxl with --user flag, using --break-system-packages only if pip < 23.0
-echo "Installing openpyxl for current user..."
-echo "(This will not affect your system Python installation)"
-echo ""
-
-# Get pip version
+# Get pip version to determine if --break-system-packages is needed (pip >= 23.0)
 PIP_VERSION=$($PYTHON_CMD -m pip --version 2>/dev/null | awk '{print $2}')
 # Compare pip version (major.minor)
 USE_BREAK_SYSTEM_PACKAGES=0
 if [[ "$PIP_VERSION" =~ ^([0-9]+)\.([0-9]+) ]]; then
     MAJOR=${BASH_REMATCH[1]}
     MINOR=${BASH_REMATCH[2]}
-    if (( MAJOR < 23 )); then
+    if (( MAJOR >= 23 )); then
         USE_BREAK_SYSTEM_PACKAGES=1
     fi
 fi

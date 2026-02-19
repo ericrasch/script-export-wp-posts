@@ -21,7 +21,7 @@
 #   GitHub: https://github.com/ericrasch/script-export-wp-posts
 # Date Created: 2025-08-11
 # Last Modified: 2025-08-12
-# Version: 4.0
+# Version: 5.0
 # 
 # Usage:
 #   ./export_wp_posts.sh
@@ -42,18 +42,58 @@
 
 set -euo pipefail
 
-# Enable DEBUG mode (set to 1 to enable debug logging)
+# Parse command-line arguments
+REMOTE_MODE=0
+VERBOSE=0
 DEBUG=0
+for arg in "$@"; do
+    case "$arg" in
+        --remote|-r) REMOTE_MODE=1 ;;
+        --verbose|-v) VERBOSE=1 ;;
+        --debug) DEBUG=1; VERBOSE=1 ;;
+    esac
+done
 
-# Expected final columns for merged posts:
-# 1: ID, 2: post_title, 3: post_name, 4: custom_permalink, 5: post_date, 6: post_status, 7: post_type
+# Expected final columns for merged posts (computed dynamically after meta field prompt):
+# Base: ID, post_title, post_name, custom_permalink, post_date, post_status, post_type = 7
+# Plus any custom meta fields the user adds
 EXPECTED_COLUMNS=7
+
+# Flag: set to 1 when permalink structure requires full path export
+EXPORT_PERMALINK_PATH=0
+PERMALINK_PATH_FILE=""
+HOME_URL=""
 
 # Colors
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 RED='\033[0;31m'
 NC='\033[0m'
+
+# SSH options (consistent across all SSH calls)
+SSH_OPTS="-T -o ServerAliveInterval=5 -o ServerAliveCountMax=3 -o ConnectTimeout=30"
+# Route SSH stderr to terminal in verbose mode, suppress otherwise
+if [ "$VERBOSE" -eq 1 ]; then
+    SSH_STDERR="/dev/stderr"
+else
+    SSH_STDERR="/dev/null"
+fi
+# Sudo prefix for remote commands (set during RemoteCommand detection)
+SUDO_PREFIX=""
+
+# Build a remote command string, wrapping with sudo if needed
+# Usage: build_remote_cmd "cd /path && wp post-type list"
+build_remote_cmd() {
+    local cmd="$1"
+    if [ -n "$SUDO_PREFIX" ]; then
+        # Wrap in sudo -iu <user> bash -c '...'
+        # Escape single quotes in the command for bash -c wrapping
+        local escaped_cmd="${cmd//\'/\'\\\'\'}"
+        echo "$SUDO_PREFIX bash -c '$escaped_cmd'"
+    else
+        echo "$cmd"
+    fi
+}
 
 # Configuration directory and file
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
@@ -229,17 +269,24 @@ print(json.dumps(config, indent=2))
 # Mode Selection
 #########################################
 
-echo -e "${GREEN}=== WordPress Export Script v4.0 ===${NC}"
-echo ""
-echo "Select export mode:"
-echo "  1) Local WordPress"
-echo "  2) Remote WordPress (SSH)"
-echo ""
-read -rp "Enter choice (1 or 2): " MODE_CHOICE
+echo -e "${GREEN}=== WordPress Export Script v5.0 ===${NC}"
 
-REMOTE_MODE=0
-if [[ "$MODE_CHOICE" == "2" ]]; then
-    REMOTE_MODE=1
+if [ "$VERBOSE" -eq 1 ]; then
+    echo -e "${YELLOW}Verbose mode enabled — SSH debug output will be shown${NC}"
+fi
+
+# Skip mode selection if --remote was passed via CLI
+if [ "$REMOTE_MODE" -eq 0 ]; then
+    echo ""
+    echo "Select export mode:"
+    echo "  1) Local WordPress"
+    echo "  2) Remote WordPress (SSH)"
+    echo ""
+    read -rp "Enter choice (1 or 2): " MODE_CHOICE
+
+    if [[ "$MODE_CHOICE" == "2" ]]; then
+        REMOTE_MODE=1
+    fi
 fi
 
 #########################################
@@ -260,7 +307,6 @@ if [ "$REMOTE_MODE" -eq 0 ]; then
     
     # Set local environment
     export LC_ALL=C
-    WP_CMD="wp --allow-root"
     WP_PATH="."
     
 else
@@ -342,31 +388,61 @@ else
         # SSH config host selected
         SSH_CONNECTION="${SSH_HOSTS[$((HOST_CHOICE-1))]}"
         echo -e "${GREEN}Using: $SSH_CONNECTION${NC}"
-        
+
+        # Check if this host has a saved path in favorites
+        SAVED_PATH=""
+        for fav in ${SSH_FAVORITES[@]+"${SSH_FAVORITES[@]}"}; do
+            IFS='|' read -r idx fav_conn fav_path <<< "$fav"
+            if [[ "$fav_conn" == "$SSH_CONNECTION" ]]; then
+                SAVED_PATH="$fav_path"
+                break
+            fi
+        done
+
+        if [ -n "$SAVED_PATH" ]; then
+            echo -e "${YELLOW}Previous path found: $SAVED_PATH${NC}"
+            read -rp "Enter WordPress path (previous: $SAVED_PATH): " WP_PATH
+            WP_PATH=${WP_PATH:-$SAVED_PATH}
+        else
         # Auto-detect common paths based on hostname patterns
+        DETECTED_HOST=""
         if [[ "$SSH_CONNECTION" =~ press ]] || [[ "$SSH_CONNECTION" =~ pressable ]]; then
             SUGGESTED_PATH="/htdocs"
+            DETECTED_HOST="Pressable"
         elif [[ "$SSH_CONNECTION" =~ wpe ]] || [[ "$SSH_CONNECTION" =~ wpengine ]]; then
             SITE_NAME="${SSH_CONNECTION#wpe-}"
             SITE_NAME="${SITE_NAME%%.*}"
             SUGGESTED_PATH="/home/wpe-user/sites/$SITE_NAME"
+            DETECTED_HOST="WP Engine"
         elif [[ "$SSH_CONNECTION" =~ kinsta ]]; then
             SUGGESTED_PATH="/www/[sitename]_[id]/public"
+            DETECTED_HOST="Kinsta"
         elif [[ "$SSH_CONNECTION" =~ siteground ]]; then
             SUGGESTED_PATH="~/public_html"
+            DETECTED_HOST="SiteGround"
+        elif [[ "$SSH_CONNECTION" =~ ec2 ]] || [[ "$SSH_CONNECTION" =~ amazonaws ]] || [[ "$SSH_CONNECTION" =~ aws ]]; then
+            SUGGESTED_PATH="/var/www/html"
+            DETECTED_HOST="AWS/EC2"
+        elif [[ "$SSH_CONNECTION" =~ bitnami ]]; then
+            SUGGESTED_PATH="/opt/bitnami/wordpress"
+            DETECTED_HOST="Bitnami"
+        elif [[ "$SSH_CONNECTION" =~ lightsail ]]; then
+            SUGGESTED_PATH="/opt/bitnami/wordpress"
+            DETECTED_HOST="AWS Lightsail"
+        elif [[ "$SSH_CONNECTION" =~ cloudways ]]; then
+            SUGGESTED_PATH="~/public_html"
+            DETECTED_HOST="Cloudways"
+        elif [[ "$SSH_CONNECTION" =~ flywheel ]] || [[ "$SSH_CONNECTION" =~ getflywheel ]]; then
+            SUGGESTED_PATH="~/public_html"
+            DETECTED_HOST="Flywheel"
         else
             SUGGESTED_PATH="~/public_html"
         fi
-        
+
         # Get WordPress path
         if [ -n "$SUGGESTED_PATH" ]; then
-            # Show detected host type for clarity
-            if [[ "$SSH_CONNECTION" =~ press ]]; then
-                echo -e "${YELLOW}Detected: Pressable host${NC}"
-            elif [[ "$SSH_CONNECTION" =~ wpe ]]; then
-                echo -e "${YELLOW}Detected: WP Engine host${NC}"
-            elif [[ "$SSH_CONNECTION" =~ kinsta ]]; then
-                echo -e "${YELLOW}Detected: Kinsta host${NC}"
+            if [ -n "$DETECTED_HOST" ]; then
+                echo -e "${YELLOW}Detected: $DETECTED_HOST host${NC}"
             fi
             
             read -rp "Enter WordPress path (suggested: $SUGGESTED_PATH): " WP_PATH
@@ -374,14 +450,126 @@ else
         else
             read -rp "Enter WordPress path (e.g., ~/htdocs): " WP_PATH
         fi
+        fi  # end of saved path else block
     else
         # Custom connection
         read -rp "Enter SSH user@host: " SSH_CONNECTION
         read -rp "Enter WordPress path (e.g., ~/htdocs): " WP_PATH
     fi
     
-    # Set up remote WP command
-    WP_CMD="ssh -T -o ServerAliveInterval=5 -o ServerAliveCountMax=3 \"$SSH_CONNECTION\" \"cd '$WP_PATH' && wp\""
+    # Detect SSH config overrides (RemoteCommand, RequestTTY)
+    # These prevent passing commands via CLI and must be overridden for scripted use
+    SUDO_PREFIX=""
+    SSH_CONFIG_REMOTE_CMD=$(ssh -G "$SSH_CONNECTION" 2>/dev/null | grep -i "^remotecommand " | sed 's/^remotecommand //i' || true)
+    if [ -n "$SSH_CONFIG_REMOTE_CMD" ] && [[ "$SSH_CONFIG_REMOTE_CMD" != "none" ]]; then
+        echo -e "\n${YELLOW}Detected RemoteCommand in SSH config for $SSH_CONNECTION${NC}"
+        [ "$VERBOSE" -eq 1 ] && echo "  [DEBUG] RemoteCommand: $SSH_CONFIG_REMOTE_CMD"
+
+        # Override RemoteCommand and RequestTTY so we can pass commands
+        SSH_OPTS="$SSH_OPTS -o RemoteCommand=none -o RequestTTY=no"
+        echo "  Overriding RemoteCommand for scripted access"
+
+        # Extract sudo user if the RemoteCommand uses sudo -iu <user>
+        if [[ "$SSH_CONFIG_REMOTE_CMD" =~ sudo\ -iu\ ([a-zA-Z0-9_-]+) ]]; then
+            SUDO_USER="${BASH_REMATCH[1]}"
+            SUDO_PREFIX="sudo -iu $SUDO_USER"
+            echo -e "  Detected sudo user: ${GREEN}$SUDO_USER${NC} — will wrap WP-CLI commands with '$SUDO_PREFIX'"
+        fi
+    fi
+
+    # Validate SSH connection before proceeding
+    echo -e "\n${YELLOW}Validating SSH connection...${NC}"
+
+    # Test 1: Can we connect at all?
+    echo -n "  Testing SSH connectivity... "
+    SSH_TEST_OUTPUT=$(ssh $SSH_OPTS -o BatchMode=yes "$SSH_CONNECTION" "echo SSH_OK" 2>&1) || true
+    if [[ "$SSH_TEST_OUTPUT" == *"SSH_OK"* ]]; then
+        echo -e "${GREEN}OK${NC}"
+    else
+        echo -e "${RED}FAILED${NC}"
+        echo -e "${RED}Cannot connect to $SSH_CONNECTION${NC}"
+        echo "SSH output: $SSH_TEST_OUTPUT"
+        echo ""
+        echo "Troubleshooting:"
+        echo "  - Verify the hostname/IP is correct"
+        echo "  - Check that your SSH key is added: ssh-add -l"
+        echo "  - Try connecting manually: ssh -v $SSH_CONNECTION"
+        echo "  - Check ~/.ssh/config for this host entry"
+        exit 1
+    fi
+
+    # Test 2: Does the WordPress path exist?
+    echo -n "  Checking WordPress path ($WP_PATH)... "
+    REMOTE_CMD=$(build_remote_cmd "[ -d \"$WP_PATH\" ] && echo PATH_OK || echo PATH_MISSING")
+    PATH_TEST=$(ssh $SSH_OPTS "$SSH_CONNECTION" "$REMOTE_CMD" 2>&1) || true
+    if [[ "$PATH_TEST" == *"PATH_OK"* ]]; then
+        echo -e "${GREEN}OK${NC}"
+    else
+        echo -e "${RED}FAILED${NC}"
+        echo -e "${RED}Path '$WP_PATH' does not exist on $SSH_CONNECTION${NC}"
+        echo ""
+        echo "Troubleshooting — try: ssh $SSH_CONNECTION 'ls -la ~/'"
+        echo "Common WordPress paths:"
+        echo "  /var/www/html             (Generic Linux/Apache)"
+        echo "  /var/www/html/wp          (AWS subdirectory install)"
+        echo "  /opt/bitnami/wordpress    (AWS Bitnami/Lightsail)"
+        echo "  /htdocs                   (Pressable)"
+        echo "  ~/public_html             (cPanel/SiteGround)"
+        exit 1
+    fi
+
+    # Test 3: Is WP-CLI available?
+    echo -n "  Checking WP-CLI availability... "
+    REMOTE_CMD=$(build_remote_cmd "cd \"$WP_PATH\" && wp --version 2>&1")
+    WPCLI_TEST=$(ssh $SSH_OPTS "$SSH_CONNECTION" "$REMOTE_CMD" 2>&1) || true
+    if [[ "$WPCLI_TEST" == *"WP-CLI"* ]]; then
+        echo -e "${GREEN}OK (${WPCLI_TEST})${NC}"
+    else
+        echo -e "${RED}FAILED${NC}"
+        echo -e "${RED}WP-CLI is not available at $WP_PATH on $SSH_CONNECTION${NC}"
+        [ -n "$WPCLI_TEST" ] && echo "Output: $WPCLI_TEST"
+        echo ""
+        echo "Install WP-CLI on the remote server:"
+        echo "  curl -O https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar"
+        echo "  chmod +x wp-cli.phar"
+        echo "  sudo mv wp-cli.phar /usr/local/bin/wp"
+        exit 1
+    fi
+
+    echo -e "${GREEN}All pre-flight checks passed.${NC}"
+fi
+
+#########################################
+# Detect Permalink Structure
+#########################################
+
+echo -e "\n${YELLOW}Detecting permalink structure...${NC}"
+
+if [ "$REMOTE_MODE" -eq 0 ]; then
+    PERMALINK_STRUCTURE=$(wp option get permalink_structure --allow-root 2>/dev/null || echo "")
+    HOME_URL=$(wp option get home --allow-root 2>/dev/null | sed 's|/$||' || echo "")
+else
+    REMOTE_CMD=$(build_remote_cmd "cd \"$WP_PATH\" && wp option get permalink_structure --allow-root 2>/dev/null")
+    PERMALINK_STRUCTURE=$(ssh $SSH_OPTS "$SSH_CONNECTION" "$REMOTE_CMD" 2>"$SSH_STDERR" | tr -d '\r' || echo "")
+    REMOTE_CMD=$(build_remote_cmd "cd \"$WP_PATH\" && wp option get home --allow-root 2>/dev/null")
+    HOME_URL=$(ssh $SSH_OPTS "$SSH_CONNECTION" "$REMOTE_CMD" 2>"$SSH_STDERR" | tr -d '\r' | sed 's|/$||' || echo "")
+fi
+
+# Normalize: trim whitespace and carriage returns
+PERMALINK_STRUCTURE=$(echo "$PERMALINK_STRUCTURE" | xargs 2>/dev/null || echo "")
+
+echo "  Permalink structure: ${PERMALINK_STRUCTURE:-'(default/plain)'}"
+
+# If structure contains anything beyond %postname%, we need full permalink paths
+# Simple structures: /%postname%/, /%post_id%/ — these don't need extra path resolution
+if [[ -n "$PERMALINK_STRUCTURE" ]] && \
+   [[ "$PERMALINK_STRUCTURE" != "/%postname%/" ]] && \
+   [[ "$PERMALINK_STRUCTURE" != "/%postname%" ]] && \
+   [[ "$PERMALINK_STRUCTURE" != "/%post_id%/" ]]; then
+    EXPORT_PERMALINK_PATH=1
+    echo -e "  ${YELLOW}Non-simple permalink structure detected — will export full permalink paths${NC}"
+else
+    echo -e "  ${GREEN}Simple permalink structure — standard URL construction will be used${NC}"
 fi
 
 #########################################
@@ -436,6 +624,7 @@ mkdir -p "$EXPORT_DIR"
 # Define file paths
 ALL_POSTS_FILE="$EXPORT_DIR/export_all_posts.csv"
 CUSTOM_PERMALINKS_FILE="$EXPORT_DIR/export_custom_permalinks.csv"
+PERMALINK_PATH_FILE="$EXPORT_DIR/export_permalink_paths.csv"
 TEMP_FILE="$EXPORT_DIR/export_wp_posts_temp.csv"
 VALIDATED_FILE="$EXPORT_DIR/export_wp_posts_validated.csv"
 FINAL_CSV_FILE="$EXPORT_DIR/export_wp_posts_${timestamp}.csv"
@@ -445,6 +634,7 @@ DEBUG_FILE="$EXPORT_DIR/export_debug_log.txt"
 # Clear previous export files
 > "$ALL_POSTS_FILE"
 > "$CUSTOM_PERMALINKS_FILE"
+[ "$EXPORT_PERMALINK_PATH" -eq 1 ] && > "$PERMALINK_PATH_FILE"
 [ "$DEBUG" -eq 1 ] && > "$DEBUG_FILE"
 
 echo -e "\n${YELLOW}Discovering post types...${NC}"
@@ -473,24 +663,30 @@ else
     
     # Method 1: Simple approach
     echo "Method 1: Trying standard discovery..."
-    POST_TYPES_RAW=$(ssh -T -o ServerAliveInterval=5 -o ServerAliveCountMax=3 "$SSH_CONNECTION" \
-        "cd \"$WP_PATH\" && wp post-type list --field=name --public=true --format=csv 2>/dev/null" 2>/dev/null || echo "")
-    
-    # Clean output
-    POST_TYPES_RAW=$(echo "$POST_TYPES_RAW" | tr -d '\r' | grep -v "^$" | grep -v "Connection")
-    
+    REMOTE_CMD=$(build_remote_cmd "cd \"$WP_PATH\" && wp post-type list --field=name --public=true --format=csv 2>/dev/null")
+    [ "$VERBOSE" -eq 1 ] && echo -e "  ${YELLOW}[SSH] $REMOTE_CMD${NC}"
+    POST_TYPES_RAW=$(ssh $SSH_OPTS "$SSH_CONNECTION" "$REMOTE_CMD" 2>"$SSH_STDERR" || echo "")
+
+    # Clean output — filter SSH noise, || true prevents grep exit code 1 from killing script via pipefail
+    POST_TYPES_RAW=$(echo "$POST_TYPES_RAW" | tr -d '\r' | grep -v "^$" | grep -v "^Connection to" | grep -v "^Warning:" | grep -v "^Pseudo-terminal" || true)
+    [ "$VERBOSE" -eq 1 ] && echo "  [DEBUG] Method 1 raw output: '$POST_TYPES_RAW'"
+
     if [ -z "$POST_TYPES_RAW" ] || [[ "$POST_TYPES_RAW" == *"Error"* ]]; then
         echo "Method 2: Trying with simpler format..."
-        POST_TYPES_RAW=$(ssh -T "$SSH_CONNECTION" \
-            "cd $WP_PATH && wp post-type list --field=name 2>/dev/null | grep -v attachment" 2>/dev/null || echo "")
-        POST_TYPES_RAW=$(echo "$POST_TYPES_RAW" | tr -d '\r' | grep -v "^$")
+        REMOTE_CMD=$(build_remote_cmd "cd \"$WP_PATH\" && wp post-type list --field=name 2>/dev/null | grep -v attachment")
+        [ "$VERBOSE" -eq 1 ] && echo -e "  ${YELLOW}[SSH] $REMOTE_CMD${NC}"
+        POST_TYPES_RAW=$(ssh $SSH_OPTS "$SSH_CONNECTION" "$REMOTE_CMD" 2>"$SSH_STDERR" || echo "")
+        POST_TYPES_RAW=$(echo "$POST_TYPES_RAW" | tr -d '\r' | grep -v "^$" || true)
+        [ "$VERBOSE" -eq 1 ] && echo "  [DEBUG] Method 2 raw output: '$POST_TYPES_RAW'"
     fi
-    
+
     if [ -z "$POST_TYPES_RAW" ] || [[ "$POST_TYPES_RAW" == *"Error"* ]]; then
         echo "Method 3: Trying PHP evaluation..."
-        POST_TYPES_RAW=$(ssh -T "$SSH_CONNECTION" \
-            "cd $WP_PATH && wp eval 'foreach(get_post_types(array(\"public\"=>true)) as \$t) if(\$t!=\"attachment\") echo \$t.\"\n\";'" 2>/dev/null || echo "")
-        POST_TYPES_RAW=$(echo "$POST_TYPES_RAW" | tr -d '\r' | grep -v "^$")
+        REMOTE_CMD=$(build_remote_cmd "cd \"$WP_PATH\" && wp eval 'foreach(get_post_types(array(\"public\"=>true)) as \$t) if(\$t!=\"attachment\") echo \$t.\"\n\";'")
+        [ "$VERBOSE" -eq 1 ] && echo -e "  ${YELLOW}[SSH] $REMOTE_CMD${NC}"
+        POST_TYPES_RAW=$(ssh $SSH_OPTS "$SSH_CONNECTION" "$REMOTE_CMD" 2>"$SSH_STDERR" || echo "")
+        POST_TYPES_RAW=$(echo "$POST_TYPES_RAW" | tr -d '\r' | grep -v "^$" || true)
+        [ "$VERBOSE" -eq 1 ] && echo "  [DEBUG] Method 3 raw output: '$POST_TYPES_RAW'"
     fi
     
     if [ -n "$POST_TYPES_RAW" ] && [[ "$POST_TYPES_RAW" != *"closed"* ]] && [[ "$POST_TYPES_RAW" != *"Error"* ]]; then
@@ -552,6 +748,39 @@ echo "Will export post types: ${POST_TYPES[*]}"
 POST_TYPES_LIST=$(IFS=,; echo "${POST_TYPES[*]}")
 
 #########################################
+# Custom Meta Fields
+#########################################
+
+CUSTOM_META_KEYS=()
+META_FILES=()
+
+echo ""
+read -rp "Export additional meta fields? (y/n, default: n): " ADD_META
+if [[ "$ADD_META" == "y" || "$ADD_META" == "Y" ]]; then
+    echo "Enter meta key names one per line (press Enter twice when done):"
+    echo "Example: _custom_clean_url, _yoast_wpseo_title"
+
+    while true; do
+        read -rp "> " meta_key
+        if [ -z "$meta_key" ]; then
+            break
+        fi
+        meta_key=$(echo "$meta_key" | xargs | tr -d ',')
+        if [ -n "$meta_key" ] && [[ ! " ${CUSTOM_META_KEYS[*]+${CUSTOM_META_KEYS[*]}} " =~ " ${meta_key} " ]]; then
+            CUSTOM_META_KEYS+=("$meta_key")
+            echo "  Added: $meta_key"
+        fi
+    done
+fi
+
+if [ ${#CUSTOM_META_KEYS[@]} -gt 0 ]; then
+    echo -e "${GREEN}Will export meta fields: ${CUSTOM_META_KEYS[*]}${NC}"
+fi
+
+# Dynamic column count: 7 base columns + number of custom meta fields
+EXPECTED_COLUMNS=$((7 + EXPORT_PERMALINK_PATH + ${#CUSTOM_META_KEYS[@]}))
+
+#########################################
 # Export Posts and Custom Permalink Data
 #########################################
 
@@ -591,8 +820,9 @@ for post_type in "${POST_TYPES[@]}"; do
         fi
     else
         # Remote export
-        EXPORT_OUTPUT=$(ssh -T -o ServerAliveInterval=5 -o ServerAliveCountMax=3 -o ConnectTimeout=30 "$SSH_CONNECTION" \
-            "cd \"$WP_PATH\" && wp post list --post_type=$post_type --post_status=any --fields=ID,post_title,post_name,post_date,post_status,post_type --format=csv 2>/dev/null" 2>/dev/null || echo "FAILED")
+        REMOTE_CMD=$(build_remote_cmd "cd \"$WP_PATH\" && wp post list --post_type=$post_type --post_status=any --fields=ID,post_title,post_name,post_date,post_status,post_type --format=csv 2>/dev/null")
+        [ "$VERBOSE" -eq 1 ] && echo -e "    ${YELLOW}[SSH] $REMOTE_CMD${NC}"
+        EXPORT_OUTPUT=$(ssh $SSH_OPTS "$SSH_CONNECTION" "$REMOTE_CMD" 2>"$SSH_STDERR" || echo "FAILED")
         
         if [[ "$EXPORT_OUTPUT" != "FAILED" ]] && [[ -n "$EXPORT_OUTPUT" ]]; then
             echo "$EXPORT_OUTPUT" | tail -n +2 >> "$ALL_POSTS_FILE"
@@ -627,7 +857,8 @@ for post_type in "${POST_TYPES[@]}"; do
         fi
     else
         # Remote export
-        ssh -T "$SSH_CONNECTION" "cd \"$WP_PATH\" && wp post list --post_type=\"$post_type\" --post_status=any --fields=ID,custom_permalink --meta_key=custom_permalink --format=csv --quiet 2>/dev/null | tail -n +2" >> "$CUSTOM_PERMALINKS_FILE" 2>/dev/null || true
+        REMOTE_CMD=$(build_remote_cmd "cd \"$WP_PATH\" && wp post list --post_type=\"$post_type\" --post_status=any --fields=ID,custom_permalink --meta_key=custom_permalink --format=csv --quiet 2>/dev/null | tail -n +2")
+        ssh $SSH_OPTS "$SSH_CONNECTION" "$REMOTE_CMD" >> "$CUSTOM_PERMALINKS_FILE" 2>"$SSH_STDERR" || true
     fi
 done
 
@@ -636,15 +867,93 @@ if [ ! -s "$CUSTOM_PERMALINKS_FILE" ]; then
 fi
 
 #########################################
-# Merge and Process Data  
+# Export Full Permalink Paths (if needed)
+#########################################
+
+if [ "$EXPORT_PERMALINK_PATH" -eq 1 ]; then
+    echo "ID,url" > "$PERMALINK_PATH_FILE"
+
+    echo -e "\n${YELLOW}Exporting full permalink paths (non-simple permalink structure)...${NC}"
+    for post_type in "${POST_TYPES[@]}"; do
+        echo "  Exporting permalink paths for $post_type..."
+
+        if [ "$REMOTE_MODE" -eq 0 ]; then
+            wp post list --post_type="$post_type" --post_status=any \
+                --fields=ID,url \
+                --format=csv --allow-root 2>/dev/null | tail -n +2 >> "$PERMALINK_PATH_FILE" || true
+        else
+            REMOTE_CMD=$(build_remote_cmd "cd \"$WP_PATH\" && wp post list --post_type=\"$post_type\" --post_status=any --fields=ID,url --format=csv --quiet 2>/dev/null | tail -n +2")
+            ssh $SSH_OPTS "$SSH_CONNECTION" "$REMOTE_CMD" >> "$PERMALINK_PATH_FILE" 2>"$SSH_STDERR" || true
+        fi
+    done
+
+    permalink_path_count=$(( $(wc -l < "$PERMALINK_PATH_FILE") - 1 ))
+    echo -e "  ${GREEN}✓ Exported $permalink_path_count permalink path entries${NC}"
+fi
+
+#########################################
+# Export Custom Meta Fields
+#########################################
+
+if [ ${#CUSTOM_META_KEYS[@]} -gt 0 ]; then
+    echo -e "\n${YELLOW}Exporting custom meta fields...${NC}"
+
+    for meta_key in "${CUSTOM_META_KEYS[@]}"; do
+        # Sanitize meta key for filename (replace non-alphanumeric with _)
+        META_KEY_SAFE=$(echo "$meta_key" | tr -c 'a-zA-Z0-9_' '_')
+        META_FILE="$EXPORT_DIR/export_meta_${META_KEY_SAFE}.csv"
+        echo "ID,$meta_key" > "$META_FILE"
+
+        for post_type in "${POST_TYPES[@]}"; do
+            echo "  Checking $meta_key for $post_type..."
+
+            if [ "$REMOTE_MODE" -eq 0 ]; then
+                # Local export
+                wp post list --post_type="$post_type" --post_status=any \
+                    --fields="ID,$meta_key" --meta_key="$meta_key" \
+                    --format=csv --allow-root 2>/dev/null | tail -n +2 >> "$META_FILE" || true
+            else
+                # Remote export
+                REMOTE_CMD=$(build_remote_cmd "cd \"$WP_PATH\" && wp post list --post_type=\"$post_type\" --post_status=any --fields=\"ID,$meta_key\" --meta_key=\"$meta_key\" --format=csv --quiet 2>/dev/null | tail -n +2")
+                ssh $SSH_OPTS "$SSH_CONNECTION" "$REMOTE_CMD" >> "$META_FILE" 2>"$SSH_STDERR" || true
+            fi
+        done
+
+        meta_entry_count=$(( $(wc -l < "$META_FILE") - 1 ))
+        if [ "$meta_entry_count" -gt 0 ]; then
+            echo -e "  ${GREEN}✓ Found $meta_entry_count entries for $meta_key${NC}"
+        else
+            echo -e "  ${YELLOW}No entries found for $meta_key (column will be empty)${NC}"
+        fi
+
+        META_FILES+=("$META_FILE")
+    done
+fi
+
+#########################################
+# Merge and Process Data
 #########################################
 
 echo -e "\n${YELLOW}Merging posts data using improved CSV parser...${NC}"
 
-# Create the header for the temp file
-echo "ID,post_title,post_name,custom_permalink,post_date,post_status,post_type" > "$TEMP_FILE"
+# Build dynamic header: ID,post_title,post_name,custom_permalink,[permalink_path],[meta fields],post_date,post_status,post_type
+MERGE_HEADER="ID,post_title,post_name,custom_permalink"
+if [ "$EXPORT_PERMALINK_PATH" -eq 1 ]; then
+    MERGE_HEADER="$MERGE_HEADER,permalink_path"
+fi
+for meta_key in ${CUSTOM_META_KEYS[@]+"${CUSTOM_META_KEYS[@]}"}; do
+    MERGE_HEADER="$MERGE_HEADER,$meta_key"
+done
+MERGE_HEADER="$MERGE_HEADER,post_date,post_status,post_type"
+echo "$MERGE_HEADER" > "$TEMP_FILE"
 
 # Use perl for reliable CSV parsing (perl is always available on macOS)
+# ARGV[0] = custom permalinks file
+# ARGV[1] = all posts file
+# ARGV[2] = permalink paths file (or /dev/null when not needed)
+# ARGV[3+] = additional meta field files (one per custom meta key)
+export WP_HOME_URL="$HOME_URL"
+export EXPORT_PERMALINK_PATH="$EXPORT_PERMALINK_PATH"
 perl -e '
 use strict;
 use warnings;
@@ -655,10 +964,10 @@ sub parse_csv_line {
     my @fields = ();
     my $field = "";
     my $in_quotes = 0;
-    
+
     for (my $i = 0; $i < length($line); $i++) {
         my $char = substr($line, $i, 1);
-        
+
         if ($char eq "\"") {
             if ($in_quotes && $i + 1 < length($line) && substr($line, $i + 1, 1) eq "\"") {
                 $field .= "\"";
@@ -674,11 +983,11 @@ sub parse_csv_line {
         }
     }
     push @fields, $field;
-    
+
     return @fields;
 }
 
-# Read custom permalinks
+# Read custom permalinks (ARGV[0])
 my %permalinks;
 open(my $perm_fh, "<", $ARGV[0]) or die "Cannot open permalinks file: $!";
 my $header = <$perm_fh>;
@@ -689,13 +998,62 @@ while (my $line = <$perm_fh>) {
 }
 close($perm_fh);
 
-# Process posts
+# Read full permalink paths (ARGV[2]) — only when EXPORT_PERMALINK_PATH=1
+my %permalink_paths;
+my $home_url = $ENV{WP_HOME_URL} || "";
+my $export_permalink_path = $ENV{EXPORT_PERMALINK_PATH} || 0;
+
+if ($export_permalink_path && defined $ARGV[2] && -f $ARGV[2]) {
+    open(my $pp_fh, "<", $ARGV[2]) or warn "Cannot open permalink paths file: $!";
+    if ($pp_fh) {
+        my $pp_header = <$pp_fh>;  # skip header
+        while (my $line = <$pp_fh>) {
+            chomp $line;
+            my @fields = parse_csv_line($line);
+            if (@fields >= 2) {
+                my $full_url = $fields[1];
+                # Strip home_url prefix, then trim leading/trailing slashes
+                $full_url =~ s|^\Q$home_url\E/?||;
+                $full_url =~ s|^/||;
+                $full_url =~ s|/$||;
+                $permalink_paths{$fields[0]} = $full_url;
+            }
+        }
+        close($pp_fh);
+    }
+}
+
+# Read additional meta field files (ARGV[3+])
+my @meta_names;
+my %meta_data;  # meta_data{field_name}{post_id} = value
+
+for (my $i = 3; $i < scalar(@ARGV); $i++) {
+    open(my $fh, "<", $ARGV[$i]) or next;
+    my $meta_header = <$fh>;
+    chomp $meta_header;
+    my @hcols = parse_csv_line($meta_header);
+    my $field_name = $hcols[1] || "meta_$i";  # Column name from header
+    push @meta_names, $field_name;
+
+    while (my $line = <$fh>) {
+        chomp $line;
+        my @fields = parse_csv_line($line);
+        if (@fields >= 2) {
+            my $val = $fields[1];
+            $val =~ s/,//g;  # Remove commas from values
+            $meta_data{$field_name}{$fields[0]} = $val;
+        }
+    }
+    close($fh);
+}
+
+# Process posts (ARGV[1])
 open(my $posts_fh, "<", $ARGV[1]) or die "Cannot open posts file: $!";
 $header = <$posts_fh>;  # Skip header
 while (my $line = <$posts_fh>) {
     chomp $line;
     my @fields = parse_csv_line($line);
-    
+
     if (@fields >= 6) {
         my $id = $fields[0];
         my $title = $fields[1];
@@ -703,21 +1061,32 @@ while (my $line = <$posts_fh>) {
         my $post_date = $fields[3];
         my $post_status = $fields[4];
         my $post_type = $fields[5];
-        
+
         # Remove commas from title
         $title =~ s/,//g;
-        
-        # Get custom permalink
+
+        # Get custom permalink (always included)
         my $custom = $permalinks{$id} || "";
-        
-        # Output CSV line
-        print "$id,$title,$post_name,$custom,$post_date,$post_status,$post_type\n";
-        
+
+        # Get full permalink path (if enabled)
+        my $ppath = $export_permalink_path ? ($permalink_paths{$id} || "") : "";
+
+        # Get additional meta field values
+        my @extras = map { $meta_data{$_}{$id} || "" } @meta_names;
+        my $extras_str = join(",", @extras);
+
+        # Output: ID,title,name,custom_permalink,[permalink_path],[extras],date,status,type
+        my @out = ($id, $title, $post_name, $custom);
+        push @out, $ppath if $export_permalink_path;
+        push @out, @extras if @extras;
+        push @out, ($post_date, $post_status, $post_type);
+        print join(",", @out) . "\n";
+
         print STDERR "Processed row: $id\n" if $ENV{DEBUG};
     }
 }
 close($posts_fh);
-' "$CUSTOM_PERMALINKS_FILE" "$ALL_POSTS_FILE" >> "$TEMP_FILE"
+' "$CUSTOM_PERMALINKS_FILE" "$ALL_POSTS_FILE" "${PERMALINK_PATH_FILE:-/dev/null}" ${META_FILES[@]+"${META_FILES[@]}"} >> "$TEMP_FILE"
 
 if [ ! -s "$TEMP_FILE" ]; then
     echo "❌ ERROR: Merging step failed. See $DEBUG_FILE for details." >&2
@@ -776,7 +1145,9 @@ if [[ "$EXPORT_USERS" == "y" || "$EXPORT_USERS" == "Y" ]]; then
         fi
     else
         # Remote user export
-        USER_DATA=$(ssh -T -o ServerAliveInterval=5 "$SSH_CONNECTION" "cd $WP_PATH && wp user list --fields=ID,user_login,user_email,first_name,last_name,display_name,roles --format=csv 2>/dev/null" 2>/dev/null || echo "")
+        REMOTE_CMD=$(build_remote_cmd "cd \"$WP_PATH\" && wp user list --fields=ID,user_login,user_email,first_name,last_name,display_name,roles --format=csv 2>/dev/null")
+        [ "$VERBOSE" -eq 1 ] && echo -e "  ${YELLOW}[SSH] $REMOTE_CMD${NC}"
+        USER_DATA=$(ssh $SSH_OPTS "$SSH_CONNECTION" "$REMOTE_CMD" 2>"$SSH_STDERR" || echo "")
         
         if [ -n "$USER_DATA" ] && [[ "$USER_DATA" != *"closed"* ]]; then
             echo "$USER_DATA" > "$USERS_FILE"
@@ -828,6 +1199,16 @@ for cmd in python3 /usr/bin/python3 /usr/local/bin/python3 /opt/homebrew/bin/pyt
 done
 
 if [ -n "$PYTHON_CMD" ]; then
+    # Build Python list of custom meta field names
+    PYTHON_META_LIST="[]"
+    if [ ${#CUSTOM_META_KEYS[@]} -gt 0 ]; then
+        PYTHON_META_LIST="["
+        for meta_key in "${CUSTOM_META_KEYS[@]}"; do
+            PYTHON_META_LIST="$PYTHON_META_LIST\"$meta_key\","
+        done
+        PYTHON_META_LIST="$PYTHON_META_LIST]"
+    fi
+
     cat > "$EXPORT_DIR/convert_to_excel.py" << EOF
 import csv
 from openpyxl import Workbook
@@ -838,12 +1219,36 @@ wb = Workbook()
 ws = wb.active
 ws.title = "${DOMAIN_SAFE}_${sheet_timestamp}"
 
+# Custom meta field names (injected from bash)
+custom_meta_keys = ${PYTHON_META_LIST}
+
+# Whether permalink_path column is present (injected from bash)
+export_permalink_path = bool(${EXPORT_PERMALINK_PATH})
+
+# Build dynamic headers
+# Fixed: url, ID, post_title, post_name, custom_permalink, [permalink_path], [meta fields], post_date, post_status, post_type, edit WP Admin
+headers = ["url", "ID", "post_title", "post_name", "custom_permalink"]
+if export_permalink_path:
+    headers.append("permalink_path")
+headers.extend(custom_meta_keys)
+headers.extend(["post_date", "post_status", "post_type", "edit WP Admin"])
+
+# Column positions (1-indexed for openpyxl)
+# A=url(1), B=ID(2), C=title(3), D=post_name(4), E=custom_permalink(5)
+# F=permalink_path(6) when present, then meta fields, then post_date, post_status, post_type, edit link
+PERMALINK_PATH_COL = 6 if export_permalink_path else None
+META_START_COL = 6 + (1 if export_permalink_path else 0)
+DATE_COL = META_START_COL + len(custom_meta_keys)
+STATUS_COL = DATE_COL + 1
+TYPE_COL = STATUS_COL + 1
+EDIT_COL = TYPE_COL + 1
+TOTAL_COLS = EDIT_COL
+
 # Add base domain
 ws["A1"] = "$BASE_DOMAIN"
 ws["A1"].font = Font(bold=True)
 
 # Add headers
-headers = ["url", "ID", "post_title", "post_name", "custom_permalink", "post_date", "post_status", "post_type", "edit WP Admin"]
 ws.append(headers)
 
 # Read CSV and add data with formulas
@@ -851,22 +1256,37 @@ with open("$FINAL_CSV_FILE", 'r', encoding='utf-8') as f:
     reader = csv.DictReader(f)
     row_num = 3
     for row in reader:
-        # URL formula
-        ws.cell(row=row_num, column=1).value = f'=IF(E{row_num}<>"","https://" & \$A\$1 & "/" & E{row_num}, "https://" & \$A\$1 & "/" & D{row_num})'
-        # Data
-        ws.cell(row=row_num, column=2).value = row['ID']
-        ws.cell(row=row_num, column=3).value = row['post_title']
-        ws.cell(row=row_num, column=4).value = row['post_name']
-        ws.cell(row=row_num, column=5).value = row['custom_permalink']
-        ws.cell(row=row_num, column=6).value = row['post_date']
-        ws.cell(row=row_num, column=7).value = row['post_status']
-        ws.cell(row=row_num, column=8).value = row['post_type']
-        # Edit link
-        ws.cell(row=row_num, column=9).value = f'=HYPERLINK("https://" & \$A\$1 & "/wp-admin/post.php?post=" & B{row_num} & "&action=edit", "edit")'
+        # URL formula — priority: custom_permalink > permalink_path > post_name
+        if export_permalink_path:
+            # Col E=custom_permalink, Col F=permalink_path, Col D=post_name
+            ws.cell(row=row_num, column=1).value = (
+                f'=IF(E{row_num}<>"","https://" & \$A\$1 & "/" & E{row_num},'
+                f'IF(F{row_num}<>"","https://" & \$A\$1 & "/" & F{row_num},'
+                f'"https://" & \$A\$1 & "/" & D{row_num}))'
+            )
+        else:
+            ws.cell(row=row_num, column=1).value = f'=IF(E{row_num}<>"","https://" & \$A\$1 & "/" & E{row_num}, "https://" & \$A\$1 & "/" & D{row_num})'
+        # Fixed data columns
+        ws.cell(row=row_num, column=2).value = row.get('ID', '')
+        ws.cell(row=row_num, column=3).value = row.get('post_title', '')
+        ws.cell(row=row_num, column=4).value = row.get('post_name', '')
+        ws.cell(row=row_num, column=5).value = row.get('custom_permalink', '')
+        # Permalink path column (only when present)
+        if export_permalink_path and PERMALINK_PATH_COL:
+            ws.cell(row=row_num, column=PERMALINK_PATH_COL).value = row.get('permalink_path', '')
+        # Custom meta field columns
+        for i, meta_key in enumerate(custom_meta_keys):
+            ws.cell(row=row_num, column=META_START_COL + i).value = row.get(meta_key, '')
+        # Remaining fixed columns
+        ws.cell(row=row_num, column=DATE_COL).value = row.get('post_date', '')
+        ws.cell(row=row_num, column=STATUS_COL).value = row.get('post_status', '')
+        ws.cell(row=row_num, column=TYPE_COL).value = row.get('post_type', '')
+        # Edit link formula
+        ws.cell(row=row_num, column=EDIT_COL).value = f'=HYPERLINK("https://" & \$A\$1 & "/wp-admin/post.php?post=" & B{row_num} & "&action=edit", "edit")'
         row_num += 1
 
 # Auto-size columns
-for col in range(1, 10):
+for col in range(1, TOTAL_COLS + 1):
     max_len = 0
     for row in ws.iter_rows(min_row=1, max_row=ws.max_row, min_col=col, max_col=col):
         try:
@@ -931,5 +1351,17 @@ echo "  - Merged posts file: $FINAL_CSV_FILE"
 echo "  - Excel file created: $EXCEL_STATUS"
 echo "  - Total posts merged: $merged_count"
 echo "  - Custom permalink entries found: $custom_count"
+if [ "$EXPORT_PERMALINK_PATH" -eq 1 ] && [ -f "$PERMALINK_PATH_FILE" ]; then
+    ppath_count=$(( $(wc -l < "$PERMALINK_PATH_FILE") - 1 ))
+    echo "  - Permalink path entries exported: $ppath_count"
+fi
+for meta_key in ${CUSTOM_META_KEYS[@]+"${CUSTOM_META_KEYS[@]}"}; do
+    META_KEY_SAFE=$(echo "$meta_key" | tr -c 'a-zA-Z0-9_' '_')
+    META_FILE="$EXPORT_DIR/export_meta_${META_KEY_SAFE}.csv"
+    if [ -f "$META_FILE" ]; then
+        meta_count=$(( $(wc -l < "$META_FILE") - 1 ))
+        echo "  - Meta field '$meta_key' entries: $meta_count"
+    fi
+done
 echo "  - Total users count: $user_count"
 [ "$DEBUG" -eq 1 ] && [ -f "$DEBUG_FILE" ] && echo "  - Debug log available at: $DEBUG_FILE"
