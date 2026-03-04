@@ -136,9 +136,18 @@ load_config() {
     fi
 }
 
-# Save configuration
+# Save configuration (with validation to prevent writing empty/corrupt data)
 save_config() {
     local config_data="$1"
+    # Validate that config_data is non-empty and valid JSON before writing
+    if [ -z "$config_data" ]; then
+        echo "Warning: Refusing to save empty config data" >&2
+        return 1
+    fi
+    if ! echo "$config_data" | python3 -c "import json,sys; json.load(sys.stdin)" 2>/dev/null; then
+        echo "Warning: Refusing to save invalid JSON config data" >&2
+        return 1
+    fi
     echo "$config_data" > "$CONFIG_FILE"
 }
 
@@ -146,9 +155,10 @@ save_config() {
 add_domain_to_history() {
     local domain="$1"
     local config=$(load_config)
-    
+
     # Add new domain to the beginning, remove duplicates, and limit to MAX_RECENT_DOMAINS
-    local updated_config=$(echo "$config" | python3 -c "
+    local updated_config
+    updated_config=$(echo "$config" | python3 -c "
 import json, sys
 from datetime import datetime, timezone
 config = json.load(sys.stdin)
@@ -170,9 +180,9 @@ if domain not in config['domain_stats']:
 config['domain_stats'][domain]['last_export'] = datetime.now(timezone.utc).isoformat()
 config['domain_stats'][domain]['export_count'] = config['domain_stats'][domain].get('export_count', 0) + 1
 print(json.dumps(config, indent=2))
-")
-    
-    save_config "$updated_config"
+") || true
+
+    save_config "$updated_config" || echo "Warning: Failed to save domain history" >&2
 }
 
 # Add SSH connection to favorites
@@ -180,8 +190,9 @@ add_ssh_to_favorites() {
     local ssh_connection="$1"
     local wp_path="$2"
     local config=$(load_config)
-    
-    local updated_config=$(echo "$config" | python3 -c "
+
+    local updated_config
+    updated_config=$(echo "$config" | python3 -c "
 import json, sys
 config = json.load(sys.stdin)
 connection = '$ssh_connection'
@@ -196,9 +207,9 @@ favorites.insert(0, entry)
 # Limit to max
 config['ssh_favorites'] = favorites[:$MAX_SSH_FAVORITES]
 print(json.dumps(config, indent=2))
-")
-    
-    save_config "$updated_config"
+") || true
+
+    save_config "$updated_config" || echo "Warning: Failed to save SSH favorites" >&2
 }
 
 # Get recent domains as array with timestamps
@@ -245,13 +256,66 @@ for i, fav in enumerate(favorites):
 "
 }
 
+# Get saved meta keys for a domain
+get_domain_meta_keys() {
+    local domain="$1"
+    local config=$(load_config)
+    echo "$config" | python3 -c "
+import json, sys
+config = json.load(sys.stdin)
+domain = '$domain'
+stats = config.get('domain_stats', {}).get(domain, {})
+meta_keys = stats.get('meta_keys', [])
+for key in meta_keys:
+    print(key)
+" 2>/dev/null || true
+}
+
+# Save meta keys for a domain
+save_domain_meta_keys() {
+    local domain="$1"
+    shift
+    local meta_keys=("$@")
+    local config=$(load_config)
+
+    # Build a JSON array of meta keys
+    local meta_json="["
+    local first=1
+    for key in "${meta_keys[@]}"; do
+        if [ "$first" -eq 1 ]; then
+            meta_json="$meta_json\"$key\""
+            first=0
+        else
+            meta_json="$meta_json,\"$key\""
+        fi
+    done
+    meta_json="$meta_json]"
+
+    local updated_config
+    updated_config=$(echo "$config" | python3 -c "
+import json, sys
+config = json.load(sys.stdin)
+domain = '$domain'
+meta_keys = json.loads('$meta_json')
+if 'domain_stats' not in config:
+    config['domain_stats'] = {}
+if domain not in config['domain_stats']:
+    config['domain_stats'][domain] = {}
+config['domain_stats'][domain]['meta_keys'] = meta_keys
+print(json.dumps(config, indent=2))
+") || true
+
+    save_config "$updated_config" || echo "Warning: Failed to save meta keys" >&2
+}
+
 # Update export statistics
 update_export_stats() {
     local domain="$1"
     local config=$(load_config)
     local timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-    
-    local updated_config=$(echo "$config" | python3 -c "
+
+    local updated_config
+    updated_config=$(echo "$config" | python3 -c "
 import json, sys
 config = json.load(sys.stdin)
 stats = config.get('export_stats', {})
@@ -260,9 +324,9 @@ stats['last_export'] = '$timestamp'
 stats['last_domain'] = '$domain'
 config['export_stats'] = stats
 print(json.dumps(config, indent=2))
-")
-    
-    save_config "$updated_config"
+") || true
+
+    save_config "$updated_config" || echo "Warning: Failed to save export stats" >&2
 }
 
 #########################################
@@ -372,18 +436,27 @@ else
     fi
     
     # Process selection
-    if [[ "$HOST_CHOICE" =~ ^F([0-9]+)$ ]]; then
-        # Favorite selected
+    HOST_CHOICE_UPPER=$(echo "$HOST_CHOICE" | tr '[:lower:]' '[:upper:]')
+    if [[ "$HOST_CHOICE_UPPER" =~ ^F([0-9]+)$ ]]; then
+        # Favorite selected — pre-fill connection and path, allow override
         FAV_NUM="${BASH_REMATCH[1]}"
+        FAV_CONNECTION=""
+        FAV_PATH=""
         for fav in "${SSH_FAVORITES[@]}"; do
             IFS='|' read -r idx connection path <<< "$fav"
             if [[ "$idx" == "$FAV_NUM" ]]; then
-                SSH_CONNECTION="$connection"
-                WP_PATH="$path"
-                echo -e "${GREEN}Using favorite: $SSH_CONNECTION (path: $WP_PATH)${NC}"
+                FAV_CONNECTION="$connection"
+                FAV_PATH="$path"
                 break
             fi
         done
+        if [ -n "$FAV_CONNECTION" ]; then
+            echo -e "${GREEN}Favorite: $FAV_CONNECTION (path: $FAV_PATH)${NC}"
+            read -rp "SSH connection [$FAV_CONNECTION]: " SSH_CONNECTION
+            SSH_CONNECTION=${SSH_CONNECTION:-$FAV_CONNECTION}
+            read -rp "WordPress path [$FAV_PATH]: " WP_PATH
+            WP_PATH=${WP_PATH:-$FAV_PATH}
+        fi
     elif [[ "$HOST_CHOICE" =~ ^[1-9][0-9]*$ ]] && [ "$HOST_CHOICE" -le "${#SSH_HOSTS[@]}" ]; then
         # SSH config host selected
         SSH_CONNECTION="${SSH_HOSTS[$((HOST_CHOICE-1))]}"
@@ -609,7 +682,10 @@ fi
 
 BASE_DOMAIN=${BASE_DOMAIN:-example.com}
 
-read -rp "Include user export? (y/n, default: y): " EXPORT_USERS
+# Save domain to history immediately so it's not lost if the script fails later
+add_domain_to_history "$BASE_DOMAIN"
+
+read -rp "Include user export? (Y/n): " EXPORT_USERS
 EXPORT_USERS=${EXPORT_USERS:-y}
 
 # Create local directory with domain name
@@ -754,26 +830,76 @@ POST_TYPES_LIST=$(IFS=,; echo "${POST_TYPES[*]}")
 CUSTOM_META_KEYS=()
 META_FILES=()
 
-echo ""
-read -rp "Export additional meta fields? (y/n, default: n): " ADD_META
-if [[ "$ADD_META" == "y" || "$ADD_META" == "Y" ]]; then
-    echo "Enter meta key names one per line (press Enter twice when done):"
-    echo "Example: _custom_clean_url, _yoast_wpseo_title"
+# Check for previously used meta keys for this domain
+SAVED_META_KEYS=()
+while IFS= read -r key; do
+    if [ -n "$key" ]; then
+        SAVED_META_KEYS+=("$key")
+    fi
+done < <(get_domain_meta_keys "$BASE_DOMAIN")
 
-    while true; do
-        read -rp "> " meta_key
-        if [ -z "$meta_key" ]; then
-            break
+echo ""
+if [ ${#SAVED_META_KEYS[@]} -gt 0 ]; then
+    echo -e "${YELLOW}Previous meta fields for $BASE_DOMAIN:${NC} ${SAVED_META_KEYS[*]}"
+    read -rp "Use previous meta fields? (Y/n): " USE_SAVED_META
+    if [[ "$USE_SAVED_META" != "n" && "$USE_SAVED_META" != "N" ]]; then
+        CUSTOM_META_KEYS=("${SAVED_META_KEYS[@]}")
+        echo -e "${GREEN}Using saved meta fields: ${CUSTOM_META_KEYS[*]}${NC}"
+        read -rp "Add more meta fields? (y/N): " ADD_MORE_META
+        if [[ "$ADD_MORE_META" == "y" || "$ADD_MORE_META" == "Y" ]]; then
+            echo "Enter additional meta key names one per line (press Enter twice when done):"
+            while true; do
+                read -rp "> " meta_key
+                if [ -z "$meta_key" ]; then
+                    break
+                fi
+                meta_key=$(echo "$meta_key" | xargs | tr -d ',')
+                if [ -n "$meta_key" ] && [[ ! " ${CUSTOM_META_KEYS[*]+${CUSTOM_META_KEYS[*]}} " =~ " ${meta_key} " ]]; then
+                    CUSTOM_META_KEYS+=("$meta_key")
+                    echo "  Added: $meta_key"
+                fi
+            done
         fi
-        meta_key=$(echo "$meta_key" | xargs | tr -d ',')
-        if [ -n "$meta_key" ] && [[ ! " ${CUSTOM_META_KEYS[*]+${CUSTOM_META_KEYS[*]}} " =~ " ${meta_key} " ]]; then
-            CUSTOM_META_KEYS+=("$meta_key")
-            echo "  Added: $meta_key"
+    else
+        read -rp "Export additional meta fields? (y/N): " ADD_META
+        if [[ "$ADD_META" == "y" || "$ADD_META" == "Y" ]]; then
+            echo "Enter meta key names one per line (press Enter twice when done):"
+            echo "Example: _custom_clean_url, _yoast_wpseo_title"
+            while true; do
+                read -rp "> " meta_key
+                if [ -z "$meta_key" ]; then
+                    break
+                fi
+                meta_key=$(echo "$meta_key" | xargs | tr -d ',')
+                if [ -n "$meta_key" ] && [[ ! " ${CUSTOM_META_KEYS[*]+${CUSTOM_META_KEYS[*]}} " =~ " ${meta_key} " ]]; then
+                    CUSTOM_META_KEYS+=("$meta_key")
+                    echo "  Added: $meta_key"
+                fi
+            done
         fi
-    done
+    fi
+else
+    read -rp "Export additional meta fields? (y/N): " ADD_META
+    if [[ "$ADD_META" == "y" || "$ADD_META" == "Y" ]]; then
+        echo "Enter meta key names one per line (press Enter twice when done):"
+        echo "Example: _custom_clean_url, _yoast_wpseo_title"
+        while true; do
+            read -rp "> " meta_key
+            if [ -z "$meta_key" ]; then
+                break
+            fi
+            meta_key=$(echo "$meta_key" | xargs | tr -d ',')
+            if [ -n "$meta_key" ] && [[ ! " ${CUSTOM_META_KEYS[*]+${CUSTOM_META_KEYS[*]}} " =~ " ${meta_key} " ]]; then
+                CUSTOM_META_KEYS+=("$meta_key")
+                echo "  Added: $meta_key"
+            fi
+        done
+    fi
 fi
 
+# Save meta keys for this domain (if any were selected)
 if [ ${#CUSTOM_META_KEYS[@]} -gt 0 ]; then
+    save_domain_meta_keys "$BASE_DOMAIN" "${CUSTOM_META_KEYS[@]}"
     echo -e "${GREEN}Will export meta fields: ${CUSTOM_META_KEYS[*]}${NC}"
 fi
 
@@ -1323,8 +1449,7 @@ fi
 # Update Configuration
 #########################################
 
-# Add domain to history
-add_domain_to_history "$BASE_DOMAIN"
+# Domain history already saved earlier (right after domain selection)
 
 # If remote mode, save SSH connection
 if [ "$REMOTE_MODE" -eq 1 ]; then

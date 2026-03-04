@@ -66,25 +66,27 @@ The `export_wp_posts.sh` script follows this execution flow:
 1. **CLI Argument Parsing**: Handles `--remote`/`-r`, `--verbose`/`-v`, `--debug` flags
 2. **Environment Setup**: Configures SSH options, stderr routing, sudo prefix
 3. **SSH Connection Setup** (remote mode):
-   a. Lists SSH favorites and config hosts
+   a. Lists SSH favorites (F1-F5, pre-fill connection + path) and config hosts
    b. Path recall from favorites or hostname pattern detection
    c. RemoteCommand/RequestTTY detection and override via `ssh -G`
    d. Sudo user extraction from RemoteCommand pattern
    e. Pre-flight validation (connectivity, path, WP-CLI)
 4. **Post Type Discovery**: Dynamically identifies all public post types (excluding attachments), with 3 fallback methods
-5. **Custom Meta Field Prompt**: Interactive prompt for additional meta keys to export
-6. **Data Export**: Uses WP-CLI to export posts, custom permalinks, and any custom meta fields
-7. **Data Processing**: Merges all data using Perl with proper CSV parsing (handles quoted fields, commas in titles)
-8. **Excel Generation**: Converts CSV to Excel with Python, dynamic column count, clickable URLs and admin links
-9. **User Export**: Optionally exports user statistics with post counts
-10. **Configuration Update**: Saves domain history, SSH favorites, and export statistics
+5. **Domain Selection**: Recent domain recall with immediate config save (not deferred to end of script)
+6. **Custom Meta Field Prompt**: Recalls previously used meta keys per domain, with option to reuse or enter new ones
+7. **Data Export**: Uses WP-CLI to export posts, custom permalinks, and any custom meta fields
+8. **Data Processing**: Merges all data using Perl with proper CSV parsing (handles quoted fields, commas in titles)
+9. **Excel Generation**: Converts CSV to Excel with Python, dynamic column count, clickable URLs and admin links
+10. **User Export**: Optionally exports user statistics with post counts
+11. **Configuration Update**: Saves SSH favorites and export statistics
 
 ### Key Functions
 
 - **`build_remote_cmd()`**: Wraps commands with `sudo -iu <user>` when RemoteCommand is detected in SSH config. Called at every SSH command site to transparently handle multi-user setups (e.g., SSH as `ubuntu`, WP files owned by `blog`).
-- **`load_config()` / `save_config()`**: JSON configuration persistence using Python for parsing/writing.
-- **`add_domain_to_history()`**: Adds/promotes domains in the recent history list.
+- **`load_config()` / `save_config()`**: JSON configuration persistence using Python for parsing/writing. `save_config` validates JSON before writing to prevent data loss.
+- **`add_domain_to_history()`**: Adds/promotes domains in the recent history list. Called immediately after domain selection (not at end of script) to prevent loss on early exit.
 - **`add_ssh_to_favorites()`**: Saves SSH connection + WordPress path pairs for path recall.
+- **`get_domain_meta_keys()` / `save_domain_meta_keys()`**: Recalls and persists custom meta field choices per domain.
 - **`update_export_stats()`**: Tracks export counts and dates per domain.
 
 ### Key Technical Decisions
@@ -98,6 +100,12 @@ The `export_wp_posts.sh` script follows this execution flow:
 - Dynamic `EXPECTED_COLUMNS` computed as 7 base + number of custom meta fields
 - Uses HYPERLINK formula in Excel for clickable URLs while maintaining clean CSV format
 - Dynamically discovers post types rather than hardcoding them
+- Domain history saved immediately after selection (not end of script) to survive early exits
+- Config save functions validate JSON before writing to prevent data loss from Python failures
+- All config-modifying functions use `|| true` on Python and `|| echo "Warning"` on save to avoid crashing the export
+- SSH favorite selection is case-insensitive (`f1`/`F1` both work) using `tr` for Bash 3.x compatibility (macOS)
+- Meta field choices stored per domain in `domain_stats.<domain>.meta_keys` for recall on subsequent exports
+- Y/n prompts capitalize the default choice (e.g., `Y/n` means default yes, `y/N` means default no)
 
 ### Dependencies and Requirements
 - **WP-CLI**: Must be installed and accessible in PATH (local) or on remote server
@@ -185,5 +193,6 @@ When modifying the script:
 6. **SSH Hosts**: The script auto-detects SSH hosts from `~/.ssh/config`
 7. **Remote Paths**: Automatically suggests paths for known hosts (Pressable, WP Engine, Kinsta, AWS/EC2, Bitnami, Lightsail, Cloudways, Flywheel)
 8. **Path Recall**: Previously used paths are recalled from SSH favorites
-9. **Meta Fields**: Users can add any number of custom meta keys at export time
+9. **Meta Fields**: Users can add any number of custom meta keys at export time; previously used keys are recalled per domain
 10. **SSH Options**: Centralized in `SSH_OPTS` variable for easy modification
+11. **Config Safety**: `save_config` validates JSON before writing; all config functions handle errors gracefully

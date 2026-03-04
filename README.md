@@ -10,7 +10,7 @@ A powerful shell script that exports WordPress posts, custom permalinks, custom 
 - 🌐 **Multi-Host Support**: Works with Pressable, WP Engine, Kinsta, AWS, and more
 - 🔧 **SSH Debugging**: Built-in verbose mode, pre-flight validation, and RemoteCommand detection
 - 📋 **Custom Meta Fields**: Export any WordPress meta key as additional spreadsheet columns
-- 💾 **Configuration Memory**: Remembers recent domains, SSH connections, and paths
+- 💾 **Configuration Memory**: Remembers recent domains, SSH connections, paths, and meta field choices per domain
 
 ![CleanShot 2025-04-16 at 11 52 09](https://github.com/user-attachments/assets/0289ce1c-5d1e-4fd7-92ee-23c87546e33d)
 
@@ -24,10 +24,12 @@ A powerful shell script that exports WordPress posts, custom permalinks, custom 
 - **Excel Generation**: Automatically converts CSV to Excel with formulas for clickable URLs
 - **SEO-Ready**: Includes all necessary data for SEO audits and migration planning
 - **Smart SSH**: Auto-detects SSH hosts from config and suggests appropriate paths
+- **SSH Favorites with Pre-fill**: Selecting a favorite pre-fills connection and path (editable, just hit Enter to accept)
 - **Path Recall**: Remembers previously used paths for each SSH host
 - **SSH Pre-Flight Validation**: Tests connectivity, path existence, and WP-CLI availability before exporting
 - **RemoteCommand Detection**: Automatically handles SSH configs with `RemoteCommand` and `RequestTTY` directives
 - **Sudo Wrapping**: Detects `sudo -iu <user>` patterns in SSH config and wraps commands accordingly
+- **Meta Field Recall**: Remembers previously used meta keys per domain and offers to reuse them
 - **Domain-Named Folders**: Export folders include the domain name for easy identification
 - **Host Detection**: Recognizes common hosts and adapts accordingly
 - **Verbose/Debug Modes**: CLI flags for troubleshooting SSH and export issues
@@ -65,12 +67,12 @@ A powerful shell script that exports WordPress posts, custom permalinks, custom 
 
 The script will:
 1. Auto-detect available SSH hosts from your `~/.ssh/config` (remote mode)
-2. Show SSH favorites with saved paths from previous exports
+2. Show SSH favorites (F1-F5) with saved paths — select to pre-fill connection and path
 3. Suggest appropriate WordPress paths based on the host type or saved history
 4. Run pre-flight SSH validation (connectivity, path, WP-CLI)
 5. Discover all public post types dynamically
-6. Prompt for optional custom meta field exports
-7. Prompt for domain name and user export preference
+6. Prompt for domain name (with recent domain recall) and user export preference
+7. Recall previously used meta fields for the domain, or prompt for new ones
 8. Generate all files locally in a timestamped, domain-named folder
 
 ## Output
@@ -141,10 +143,12 @@ If a host has been used before via SSH favorites, the previously used path is su
 
 The script stores configuration in `.config/wp-export-config.json` (gitignored) in the script directory:
 
-- **Recent Domains**: Up to 10 recently exported domains, shown as selectable options
-- **SSH Favorites**: Recently used SSH connections with their WordPress paths, shown at the top of the host list
+- **Recent Domains**: Up to 10 recently exported domains, shown as selectable options. Domain is saved immediately on selection (not after export completes)
+- **SSH Favorites**: Recently used SSH connections with their WordPress paths, shown as F1-F5 at the top of the host list. Selecting a favorite pre-fills both connection and path (editable)
 - **Export Statistics**: Tracks export count, last export date, and post counts per domain
+- **Meta Field Memory**: Remembers custom meta keys per domain. On subsequent exports, offers to reuse previous selections with option to add more
 - **Path Recall**: When selecting an SSH host by number, if that host was previously used as a favorite, its saved path is suggested automatically
+- **Config Safety**: Configuration saves validate JSON before writing, preventing data loss from failed saves
 
 ## Exported Data
 
@@ -163,7 +167,7 @@ The script stores configuration in `.config/wp-export-config.json` (gitignored) 
 When prompted, you can export any WordPress meta key as an additional column. Enter meta key names one at a time (press Enter on an empty line when done):
 
 ```
-Export additional meta fields? (y/n, default: n): y
+Export additional meta fields? (y/N): y
 Enter meta key names one per line (press Enter twice when done):
 Example: _custom_clean_url, _yoast_wpseo_title
 > _yoast_wpseo_title
@@ -171,6 +175,15 @@ Example: _custom_clean_url, _yoast_wpseo_title
 > _custom_clean_url
   Added: _custom_clean_url
 >
+```
+
+On subsequent exports for the same domain, previously used meta keys are recalled:
+
+```
+Previous meta fields for example.com: _yoast_wpseo_title _custom_clean_url
+Use previous meta fields? (Y/n):
+Using saved meta fields: _yoast_wpseo_title _custom_clean_url
+Add more meta fields? (y/N):
 ```
 
 Each meta field is exported to its own intermediate CSV, then merged into the final output. The `custom_permalink` column is always present regardless of custom meta field choices.
