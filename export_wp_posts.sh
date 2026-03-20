@@ -765,8 +765,9 @@ EXPORT_USERS=${EXPORT_USERS:-y}
 timestamp=$(date +"%Y%m%d_%H%M%S")
 # Create sheet-friendly timestamp format
 sheet_timestamp=$(date +"%Y-%m-%d_%H%M%S")
-# Sanitize domain name for filesystem (replace . and / with -, already normalized above)
-DOMAIN_SAFE=$(echo "$BASE_DOMAIN" | tr './' '-' | tr '[:upper:]' '[:lower:]')
+# Sanitize domain name for filesystem and Excel sheet names
+# Replace . / : with dashes (colon is invalid in Excel sheet titles)
+DOMAIN_SAFE=$(echo "$BASE_DOMAIN" | tr './:' '-' | tr '[:upper:]' '[:lower:]')
 EXPORT_DIR="!export_wp_posts_${timestamp}_${DOMAIN_SAFE}"
 mkdir -p "$EXPORT_DIR"
 
@@ -1416,7 +1417,10 @@ from openpyxl.utils import get_column_letter
 
 wb = Workbook()
 ws = wb.active
-ws.title = "${DOMAIN_SAFE}_${sheet_timestamp}"
+# Excel sheet names: max 31 chars, no \/:*?[]
+import re
+sheet_name = re.sub(r'[\\\/:*?\[\]]', '-', "${DOMAIN_SAFE}_${sheet_timestamp}")[:31]
+ws.title = sheet_name
 
 # Custom meta field names (injected from bash)
 custom_meta_keys = ${PYTHON_META_LIST}
@@ -1450,6 +1454,10 @@ ws["A1"].font = Font(bold=True)
 # Add headers
 ws.append(headers)
 
+# Base URL formula fragment: prepend https:// only if A1 doesn't already start with it
+# This lets users put either "example.com" or "https://example.com" in A1 and get correct URLs
+BASE = 'IF(LEFT(\$A\$1,8)="https://",\$A\$1,IF(LEFT(\$A\$1,7)="http://",\$A\$1,"https://" & \$A\$1))'
+
 # Read CSV and add data with formulas
 with open("$FINAL_CSV_FILE", 'r', encoding='utf-8') as f:
     reader = csv.DictReader(f)
@@ -1459,12 +1467,12 @@ with open("$FINAL_CSV_FILE", 'r', encoding='utf-8') as f:
         if export_permalink_path:
             # Col E=custom_permalink, Col F=permalink_path, Col D=post_name
             ws.cell(row=row_num, column=1).value = (
-                f'=IF(E{row_num}<>"","https://" & \$A\$1 & "/" & E{row_num},'
-                f'IF(F{row_num}<>"","https://" & \$A\$1 & "/" & F{row_num},'
-                f'"https://" & \$A\$1 & "/" & D{row_num}))'
+                f'=IF(E{row_num}<>"",{BASE} & "/" & E{row_num},'
+                f'IF(F{row_num}<>"",{BASE} & "/" & F{row_num},'
+                f'{BASE} & "/" & D{row_num}))'
             )
         else:
-            ws.cell(row=row_num, column=1).value = f'=IF(E{row_num}<>"","https://" & \$A\$1 & "/" & E{row_num}, "https://" & \$A\$1 & "/" & D{row_num})'
+            ws.cell(row=row_num, column=1).value = f'=IF(E{row_num}<>"",{BASE} & "/" & E{row_num}, {BASE} & "/" & D{row_num})'
         # Fixed data columns
         ws.cell(row=row_num, column=2).value = row.get('ID', '')
         ws.cell(row=row_num, column=3).value = row.get('post_title', '')
@@ -1481,7 +1489,7 @@ with open("$FINAL_CSV_FILE", 'r', encoding='utf-8') as f:
         ws.cell(row=row_num, column=STATUS_COL).value = row.get('post_status', '')
         ws.cell(row=row_num, column=TYPE_COL).value = row.get('post_type', '')
         # Edit link formula
-        ws.cell(row=row_num, column=EDIT_COL).value = f'=HYPERLINK("https://" & \$A\$1 & "/wp-admin/post.php?post=" & B{row_num} & "&action=edit", "edit")'
+        ws.cell(row=row_num, column=EDIT_COL).value = f'=HYPERLINK({BASE} & "/wp-admin/post.php?post=" & B{row_num} & "&action=edit", "edit")'
         row_num += 1
 
 # Auto-size columns
