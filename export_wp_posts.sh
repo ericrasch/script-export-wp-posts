@@ -54,6 +54,75 @@ for arg in "$@"; do
     esac
 done
 
+# Pre-flight check: verify Python + openpyxl for Excel generation
+EXCEL_AVAILABLE=0
+for cmd in python3 /usr/bin/python3 /usr/local/bin/python3 /opt/homebrew/bin/python3; do
+    if command -v $cmd &> /dev/null; then
+        export PYTHONPATH="$HOME/.local/lib/python3.*/site-packages:${PYTHONPATH:-}"
+        if $cmd -c "import openpyxl" 2>/dev/null; then
+            EXCEL_AVAILABLE=1
+            break
+        fi
+    fi
+done
+
+if [ "$EXCEL_AVAILABLE" -eq 0 ]; then
+    # Check if Python 3 exists at all (needed for both install and Excel)
+    PREFLIGHT_PYTHON=""
+    for cmd in python3 /usr/bin/python3 /usr/local/bin/python3 /opt/homebrew/bin/python3; do
+        if command -v $cmd &> /dev/null; then
+            PREFLIGHT_PYTHON=$cmd
+            break
+        fi
+    done
+
+    echo -e "${YELLOW}⚠️  Excel generation is not available (Python 3 + openpyxl required).${NC}"
+    echo ""
+    if [ -n "$PREFLIGHT_PYTHON" ]; then
+        echo "  i) Install openpyxl now and continue"
+    fi
+    echo "  c) Continue anyway (CSV export only)"
+    echo "  q) Quit"
+    echo ""
+    read -rp "Choose an option: " EXCEL_CHOICE
+    EXCEL_CHOICE=$(echo "$EXCEL_CHOICE" | tr '[:upper:]' '[:lower:]')
+
+    case "$EXCEL_CHOICE" in
+        i)
+            if [ -z "$PREFLIGHT_PYTHON" ]; then
+                echo -e "${RED}Python 3 is not installed. Install it first (e.g., brew install python@3).${NC}"
+                exit 1
+            fi
+            echo ""
+            echo "Installing openpyxl..."
+            # Detect pip version to determine if --break-system-packages is needed
+            PIP_VERSION=$($PREFLIGHT_PYTHON -m pip --version 2>/dev/null | awk '{print $2}')
+            BREAK_FLAG=""
+            if [[ "$PIP_VERSION" =~ ^([0-9]+)\. ]] && (( ${BASH_REMATCH[1]} >= 23 )); then
+                BREAK_FLAG="--break-system-packages"
+            fi
+            if $PREFLIGHT_PYTHON -m pip install --user $BREAK_FLAG openpyxl; then
+                echo -e "${GREEN}✅ openpyxl installed successfully!${NC}"
+                EXCEL_AVAILABLE=1
+            else
+                echo -e "${RED}❌ Installation failed.${NC}"
+                read -rp "Continue without Excel? (y/N): " FALLBACK_CHOICE
+                if [[ ! "$FALLBACK_CHOICE" =~ ^[Yy]$ ]]; then
+                    exit 1
+                fi
+            fi
+            ;;
+        c)
+            echo "Continuing without Excel export..."
+            ;;
+        *)
+            echo "Exiting."
+            exit 0
+            ;;
+    esac
+    echo ""
+fi
+
 # Expected final columns for merged posts (computed dynamically after meta field prompt):
 # Base: ID, post_title, post_name, custom_permalink, post_date, post_status, post_type = 7
 # Plus any custom meta fields the user adds
@@ -682,6 +751,10 @@ fi
 
 BASE_DOMAIN=${BASE_DOMAIN:-example.com}
 
+# Normalize domain: strip protocol prefix and trailing slashes
+# Allows users to paste full URLs like https://example.com/blog/ and still get clean domain
+BASE_DOMAIN=$(echo "$BASE_DOMAIN" | sed 's|^https\?://||' | sed 's|/*$||')
+
 # Save domain to history immediately so it's not lost if the script fails later
 add_domain_to_history "$BASE_DOMAIN"
 
@@ -692,8 +765,8 @@ EXPORT_USERS=${EXPORT_USERS:-y}
 timestamp=$(date +"%Y%m%d_%H%M%S")
 # Create sheet-friendly timestamp format
 sheet_timestamp=$(date +"%Y-%m-%d_%H%M%S")
-# Sanitize domain name for filesystem (replace . with -, remove protocol if present)
-DOMAIN_SAFE=$(echo "$BASE_DOMAIN" | sed 's|https\?://||' | sed 's|/.*||' | tr '.' '-' | tr '[:upper:]' '[:lower:]')
+# Sanitize domain name for filesystem (replace . and / with -, already normalized above)
+DOMAIN_SAFE=$(echo "$BASE_DOMAIN" | tr './' '-' | tr '[:upper:]' '[:lower:]')
 EXPORT_DIR="!export_wp_posts_${timestamp}_${DOMAIN_SAFE}"
 mkdir -p "$EXPORT_DIR"
 
