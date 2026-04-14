@@ -1458,21 +1458,50 @@ ws.append(headers)
 # This lets users put either "example.com" or "https://example.com" in A1 and get correct URLs
 BASE = 'IF(LEFT(\$A\$1,8)="https://",\$A\$1,IF(LEFT(\$A\$1,7)="http://",\$A\$1,"https://" & \$A\$1))'
 
+# Base domain ONLY (strips any path like /blog from A1) — used when a clean_url meta field
+# provides the full path and the A1 subpath should not be included
+BASE_DOMAIN_ONLY = (
+    'IF(LEFT(\$A\$1,8)="https://",'
+    '"https://" & LEFT(MID(\$A\$1,9,999),IFERROR(FIND("/",MID(\$A\$1,9,999))-1,LEN(MID(\$A\$1,9,999)))),'
+    'IF(LEFT(\$A\$1,7)="http://",'
+    '"http://" & LEFT(MID(\$A\$1,8,999),IFERROR(FIND("/",MID(\$A\$1,8,999))-1,LEN(MID(\$A\$1,8,999)))),'
+    '"https://" & LEFT(\$A\$1,IFERROR(FIND("/",\$A\$1)-1,LEN(\$A\$1)))))'
+)
+
+# Detect if _telyrx_clean_url is among the custom meta fields
+clean_url_col = None
+if '_telyrx_clean_url' in custom_meta_keys:
+    clean_url_col_num = META_START_COL + custom_meta_keys.index('_telyrx_clean_url')
+    clean_url_col = get_column_letter(clean_url_col_num)
+
 # Read CSV and add data with formulas
 with open("$FINAL_CSV_FILE", 'r', encoding='utf-8') as f:
     reader = csv.DictReader(f)
     row_num = 3
     for row in reader:
-        # URL formula — priority: custom_permalink > permalink_path > post_name
+        # URL formula — priority: clean_url (base domain only) > custom_permalink > permalink_path > post_name
+        # Build the standard fallback chain first
         if export_permalink_path:
             # Col E=custom_permalink, Col F=permalink_path, Col D=post_name
-            ws.cell(row=row_num, column=1).value = (
-                f'=IF(E{row_num}<>"",{BASE} & "/" & E{row_num},'
+            fallback = (
+                f'IF(E{row_num}<>"",{BASE} & "/" & E{row_num},'
                 f'IF(F{row_num}<>"",{BASE} & "/" & F{row_num},'
                 f'{BASE} & "/" & D{row_num}))'
             )
         else:
-            ws.cell(row=row_num, column=1).value = f'=IF(E{row_num}<>"",{BASE} & "/" & E{row_num}, {BASE} & "/" & D{row_num})'
+            fallback = f'IF(E{row_num}<>"",{BASE} & "/" & E{row_num},{BASE} & "/" & D{row_num})'
+
+        # If clean_url column exists, prepend it as highest priority using base domain only
+        if clean_url_col:
+            url_formula = (
+                f'=IF({clean_url_col}{row_num}<>"",'
+                f'{BASE_DOMAIN_ONLY} & IF(LEFT({clean_url_col}{row_num},1)="/",{clean_url_col}{row_num},"/" & {clean_url_col}{row_num}),'
+                f'{fallback})'
+            )
+        else:
+            url_formula = f'={fallback}'
+
+        ws.cell(row=row_num, column=1).value = url_formula
         # Fixed data columns
         ws.cell(row=row_num, column=2).value = row.get('ID', '')
         ws.cell(row=row_num, column=3).value = row.get('post_title', '')
