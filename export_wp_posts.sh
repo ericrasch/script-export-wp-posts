@@ -992,25 +992,16 @@ if [ "$REMOTE_MODE" -eq 1 ]; then
     echo "Note: Remote hosts may close connections during large exports. This is normal."
 fi
 
-FIRST=1
 for post_type in "${POST_TYPES[@]}"; do
     echo "  Exporting post type: $post_type"
     
     if [ "$REMOTE_MODE" -eq 0 ]; then
-        # Local export
-        if [ "$FIRST" -eq 1 ]; then
-            # First type - include headers
-            wp post list --post_type="$post_type" --post_status=any \
-                --fields=ID,post_title,post_name,post_date,post_modified,post_status,post_type \
-                --format=csv --allow-root >> "$ALL_POSTS_FILE"
-            FIRST=0
-        else
-            # Subsequent types - skip headers
-            wp post list --post_type="$post_type" --post_status=any \
-                --fields=ID,post_title,post_name,post_date,post_modified,post_status,post_type \
-                --format=csv --allow-root | tail -n +2 >> "$ALL_POSTS_FILE"
-        fi
-        
+        # Local export — header already written above, so strip WP-CLI's header
+        # from every post type to avoid a duplicate header leaking in as a data row
+        wp post list --post_type="$post_type" --post_status=any \
+            --fields=ID,post_title,post_name,post_date,post_modified,post_status,post_type \
+            --format=csv --allow-root | tail -n +2 >> "$ALL_POSTS_FILE"
+
         if [ $? -eq 0 ]; then
             POST_COUNT=$(wp post list --post_type="$post_type" --post_status=any --format=count --allow-root)
             echo "    ✓ Exported $POST_COUNT $post_type(s)"
