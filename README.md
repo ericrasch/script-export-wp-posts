@@ -100,7 +100,7 @@ The generated Excel file includes:
 - **Custom Meta Columns**: Inserted between custom_permalink and post_date (if any meta fields were exported)
 - **Last Column**: Clickable WP Admin edit links
 
-The number of columns adjusts dynamically based on how many custom meta fields are exported. The base is 7 columns (ID, title, name, custom_permalink, date, status, type) plus one column per meta field, plus the URL formula and edit link columns.
+The number of columns adjusts dynamically based on how many custom meta fields are exported. The base is 8 columns (ID, title, name, custom_permalink, date, modified, status, type) plus one column per meta field, plus the URL formula and edit link columns.
 
 ## Requirements
 
@@ -152,15 +152,16 @@ The script stores configuration in `.config/wp-export-config.json` (gitignored) 
 
 ## Exported Data
 
-### Posts Export (7+ columns)
+### Posts Export (8+ columns)
 1. **ID**: Post ID
 2. **post_title**: Title (sanitized, commas removed)
 3. **post_name**: URL slug
 4. **custom_permalink**: Custom permalink if set
 5. *[Custom meta fields]*: Any additional meta keys requested during export
 6. **post_date**: Publication date
-7. **post_status**: Status (publish, draft, etc.)
-8. **post_type**: Type (post, page, custom types)
+7. **post_modified**: Last modified date
+8. **post_status**: Status (publish, draft, etc.)
+9. **post_type**: Type (post, page, custom types)
 
 ### Custom Meta Fields
 

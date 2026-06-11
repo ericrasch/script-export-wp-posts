@@ -6,7 +6,7 @@
 #   Unified WordPress export script that can run either locally or via SSH.
 #   Exports WordPress posts and custom permalink information using WP-CLI,
 #   then merges the data into a final CSV with columns in the order:
-#   ID, post_title, post_name, custom_permalink, post_date, post_status, post_type.
+#   ID, post_title, post_name, custom_permalink, post_date, post_modified, post_status, post_type.
 #
 #   Additionally exports WordPress users with their details and post counts 
 #   across all public post types (excluding attachments).
@@ -124,9 +124,9 @@ if [ "$EXCEL_AVAILABLE" -eq 0 ]; then
 fi
 
 # Expected final columns for merged posts (computed dynamically after meta field prompt):
-# Base: ID, post_title, post_name, custom_permalink, post_date, post_status, post_type = 7
+# Base: ID, post_title, post_name, custom_permalink, post_date, post_modified, post_status, post_type = 8
 # Plus any custom meta fields the user adds
-EXPECTED_COLUMNS=7
+EXPECTED_COLUMNS=8
 
 # Flag: set to 1 when permalink structure requires full path export
 EXPORT_PERMALINK_PATH=0
@@ -977,15 +977,15 @@ if [ ${#CUSTOM_META_KEYS[@]} -gt 0 ]; then
     echo -e "${GREEN}Will export meta fields: ${CUSTOM_META_KEYS[*]}${NC}"
 fi
 
-# Dynamic column count: 7 base columns + number of custom meta fields
-EXPECTED_COLUMNS=$((7 + EXPORT_PERMALINK_PATH + ${#CUSTOM_META_KEYS[@]}))
+# Dynamic column count: 8 base columns + number of custom meta fields
+EXPECTED_COLUMNS=$((8 + EXPORT_PERMALINK_PATH + ${#CUSTOM_META_KEYS[@]}))
 
 #########################################
 # Export Posts and Custom Permalink Data
 #########################################
 
 # Export posts with all required fields
-echo "ID,post_title,post_name,post_date,post_status,post_type" > "$ALL_POSTS_FILE"
+echo "ID,post_title,post_name,post_date,post_modified,post_status,post_type" > "$ALL_POSTS_FILE"
 
 echo -e "\n${YELLOW}Exporting all posts...${NC}"
 if [ "$REMOTE_MODE" -eq 1 ]; then
@@ -1001,13 +1001,13 @@ for post_type in "${POST_TYPES[@]}"; do
         if [ "$FIRST" -eq 1 ]; then
             # First type - include headers
             wp post list --post_type="$post_type" --post_status=any \
-                --fields=ID,post_title,post_name,post_date,post_status,post_type \
+                --fields=ID,post_title,post_name,post_date,post_modified,post_status,post_type \
                 --format=csv --allow-root >> "$ALL_POSTS_FILE"
             FIRST=0
         else
             # Subsequent types - skip headers
             wp post list --post_type="$post_type" --post_status=any \
-                --fields=ID,post_title,post_name,post_date,post_status,post_type \
+                --fields=ID,post_title,post_name,post_date,post_modified,post_status,post_type \
                 --format=csv --allow-root | tail -n +2 >> "$ALL_POSTS_FILE"
         fi
         
@@ -1020,7 +1020,7 @@ for post_type in "${POST_TYPES[@]}"; do
         fi
     else
         # Remote export
-        REMOTE_CMD=$(build_remote_cmd "cd \"$WP_PATH\" && wp post list --post_type=$post_type --post_status=any --fields=ID,post_title,post_name,post_date,post_status,post_type --format=csv 2>/dev/null")
+        REMOTE_CMD=$(build_remote_cmd "cd \"$WP_PATH\" && wp post list --post_type=$post_type --post_status=any --fields=ID,post_title,post_name,post_date,post_modified,post_status,post_type --format=csv 2>/dev/null")
         [ "$VERBOSE" -eq 1 ] && echo -e "    ${YELLOW}[SSH] $REMOTE_CMD${NC}"
         EXPORT_OUTPUT=$(ssh $SSH_OPTS "$SSH_CONNECTION" "$REMOTE_CMD" 2>"$SSH_STDERR" || echo "FAILED")
         
@@ -1136,7 +1136,7 @@ fi
 
 echo -e "\n${YELLOW}Merging posts data using improved CSV parser...${NC}"
 
-# Build dynamic header: ID,post_title,post_name,custom_permalink,[permalink_path],[meta fields],post_date,post_status,post_type
+# Build dynamic header: ID,post_title,post_name,custom_permalink,[permalink_path],[meta fields],post_date,post_modified,post_status,post_type
 MERGE_HEADER="ID,post_title,post_name,custom_permalink"
 if [ "$EXPORT_PERMALINK_PATH" -eq 1 ]; then
     MERGE_HEADER="$MERGE_HEADER,permalink_path"
@@ -1144,7 +1144,7 @@ fi
 for meta_key in ${CUSTOM_META_KEYS[@]+"${CUSTOM_META_KEYS[@]}"}; do
     MERGE_HEADER="$MERGE_HEADER,$meta_key"
 done
-MERGE_HEADER="$MERGE_HEADER,post_date,post_status,post_type"
+MERGE_HEADER="$MERGE_HEADER,post_date,post_modified,post_status,post_type"
 echo "$MERGE_HEADER" > "$TEMP_FILE"
 
 # Use perl for reliable CSV parsing (perl is always available on macOS)
@@ -1254,13 +1254,14 @@ while (my $line = <$posts_fh>) {
     chomp $line;
     my @fields = parse_csv_line($line);
 
-    if (@fields >= 6) {
+    if (@fields >= 7) {
         my $id = $fields[0];
         my $title = $fields[1];
         my $post_name = $fields[2];
         my $post_date = $fields[3];
-        my $post_status = $fields[4];
-        my $post_type = $fields[5];
+        my $post_modified = $fields[4];
+        my $post_status = $fields[5];
+        my $post_type = $fields[6];
 
         # Remove commas from title
         $title =~ s/,//g;
@@ -1275,11 +1276,11 @@ while (my $line = <$posts_fh>) {
         my @extras = map { $meta_data{$_}{$id} || "" } @meta_names;
         my $extras_str = join(",", @extras);
 
-        # Output: ID,title,name,custom_permalink,[permalink_path],[extras],date,status,type
+        # Output: ID,title,name,custom_permalink,[permalink_path],[extras],date,modified,status,type
         my @out = ($id, $title, $post_name, $custom);
         push @out, $ppath if $export_permalink_path;
         push @out, @extras if @extras;
-        push @out, ($post_date, $post_status, $post_type);
+        push @out, ($post_date, $post_modified, $post_status, $post_type);
         print join(",", @out) . "\n";
 
         print STDERR "Processed row: $id\n" if $ENV{DEBUG};
@@ -1429,20 +1430,21 @@ custom_meta_keys = ${PYTHON_META_LIST}
 export_permalink_path = bool(${EXPORT_PERMALINK_PATH})
 
 # Build dynamic headers
-# Fixed: url, ID, post_title, post_name, custom_permalink, [permalink_path], [meta fields], post_date, post_status, post_type, edit WP Admin
+# Fixed: url, ID, post_title, post_name, custom_permalink, [permalink_path], [meta fields], post_date, post_modified, post_status, post_type, edit WP Admin
 headers = ["url", "ID", "post_title", "post_name", "custom_permalink"]
 if export_permalink_path:
     headers.append("permalink_path")
 headers.extend(custom_meta_keys)
-headers.extend(["post_date", "post_status", "post_type", "edit WP Admin"])
+headers.extend(["post_date", "post_modified", "post_status", "post_type", "edit WP Admin"])
 
 # Column positions (1-indexed for openpyxl)
 # A=url(1), B=ID(2), C=title(3), D=post_name(4), E=custom_permalink(5)
-# F=permalink_path(6) when present, then meta fields, then post_date, post_status, post_type, edit link
+# F=permalink_path(6) when present, then meta fields, then post_date, post_modified, post_status, post_type, edit link
 PERMALINK_PATH_COL = 6 if export_permalink_path else None
 META_START_COL = 6 + (1 if export_permalink_path else 0)
 DATE_COL = META_START_COL + len(custom_meta_keys)
-STATUS_COL = DATE_COL + 1
+MODIFIED_COL = DATE_COL + 1
+STATUS_COL = MODIFIED_COL + 1
 TYPE_COL = STATUS_COL + 1
 EDIT_COL = TYPE_COL + 1
 TOTAL_COLS = EDIT_COL
@@ -1515,6 +1517,7 @@ with open("$FINAL_CSV_FILE", 'r', encoding='utf-8') as f:
             ws.cell(row=row_num, column=META_START_COL + i).value = row.get(meta_key, '')
         # Remaining fixed columns
         ws.cell(row=row_num, column=DATE_COL).value = row.get('post_date', '')
+        ws.cell(row=row_num, column=MODIFIED_COL).value = row.get('post_modified', '')
         ws.cell(row=row_num, column=STATUS_COL).value = row.get('post_status', '')
         ws.cell(row=row_num, column=TYPE_COL).value = row.get('post_type', '')
         # Edit link formula
