@@ -97,7 +97,7 @@ The `export_wp_posts.sh` script follows this execution flow:
 - RemoteCommand detection uses `ssh -G <host>` to resolve effective SSH config
 - Empty bash arrays use `${array[@]+"${array[@]}"}` pattern for `set -u` compatibility
 - Creates outputs in timestamped directories with domain names (e.g., `!export_wp_posts_20250811_143244_example-com/`)
-- Dynamic `EXPECTED_COLUMNS` computed as 7 base + number of custom meta fields
+- Dynamic `EXPECTED_COLUMNS` computed as 8 base + number of custom meta fields
 - Uses HYPERLINK formula in Excel for clickable URLs while maintaining clean CSV format
 - Dynamically discovers post types rather than hardcoding them
 - Domain history saved immediately after selection (not end of script) to survive early exits
@@ -169,7 +169,7 @@ This parser correctly handles:
 - Escaped quotes within quoted fields
 - Mixed quoted and unquoted fields
 
-The Perl merge script accepts N additional meta field files via `ARGV[2+]`, loading each into `%meta_data{field_name}{post_id}`. Output column order: `ID, post_title, post_name, custom_permalink, [meta fields...], post_date, post_status, post_type`.
+The Perl merge script accepts N additional meta field files via `ARGV[2+]`, loading each into `%meta_data{field_name}{post_id}`. Output column order: `ID, post_title, post_name, custom_permalink, [meta fields...], post_date, post_modified, post_status, post_type`.
 
 ### Excel Generation
 Python heredoc builds headers dynamically based on `custom_meta_keys` list. Column positions for date, status, type, and edit link adjust automatically based on meta field count.
