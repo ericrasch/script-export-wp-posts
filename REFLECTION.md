@@ -5,7 +5,7 @@ to project standards (e.g. AGENTS.md / CLAUDE.md). Newest entries on top.
 
 ---
 
-## 2026-06-11 — PR #3: add `post_modified` column
+## 2026-06-11 — PR #3: add `post_modified` column [REVIEWED 2026-06-11 - APPROVED]
 
 **Task:** Add `post_modified` as a permanent export column immediately after
 `post_date`, threaded through WP-CLI fields, the Perl merge, and Excel output.
